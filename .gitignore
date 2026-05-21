@@ -23,3 +23,6 @@ whiteboard.md
 
 .commandcode
 
+# Log database
+.logs/
+.ruff_cache/
