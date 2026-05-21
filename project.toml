@@ -1,0 +1,15 @@
+[project]
+name = "splicer"
+version = "0.1.0"
+
+[project.stack]
+language = "python"
+runtime = "uv"
+
+[logging]
+logs_db = ".logs/app.db"
+schema_version = "2026-05-15-01"
+log_task_prefix = "logs"
+
+[env]
+name = "dev"
