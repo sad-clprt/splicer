@@ -1,0 +1,21 @@
+[environment]
+python-version = "3.14"
+python-platform = "win32"
+
+[src]
+exclude = [
+    ".venv/",
+    ".opencode/",
+    "scripts/",
+    "**/__pycache__/",
+]
+
+[analysis]
+allowed-unresolved-imports = [
+    "inngest.**",
+    "upstash_redis.**",
+]
+
+[terminal]
+error-on-warning = true
+output-format = "full"

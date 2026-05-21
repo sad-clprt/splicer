@@ -1,0 +1,37 @@
+target-version = "py314"
+line-length = 100
+indent-width = 4
+
+[lint]
+select = [
+    "F",     # Pyflakes
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "B",     # flake8-bugbear
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "SIM",   # flake8-simplify
+    "C4",    # flake8-comprehensions
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "E501",  # line-too-long (handled by formatter)
+]
+fixable = ["ALL"]
+unfixable = []
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "PLR0913", "ARG"]
+"__init__.py" = ["F401", "E402"]
+
+[lint.isort]
+force-single-line = true
+known-first-party = ["splicer"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+exclude = [".venv/", ".opencode/", "scripts/", "**/__pycache__/"]
