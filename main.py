@@ -1,5 +1,9 @@
+from splicer.logging import setup_logging
+
+
 def main():
-    print("Hello from splicer!")
+    logger = setup_logging()
+    logger.info("Hello from splicer!")
 
 
 if __name__ == "__main__":
