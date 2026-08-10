@@ -1,13 +1,23 @@
 import logging
 import os
+import uuid
+from contextlib import asynccontextmanager
 
 import inngest
 import inngest.fast_api
 import logfire
 from dotenv import load_dotenv
+from fastapi import Depends
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.database import get_db
+from app.models import Film
 
 load_dotenv()
 
@@ -21,11 +31,33 @@ logfire.configure(
 logger = logging.getLogger("uvicorn")
 logger.setLevel(logging.INFO)
 
+# Instrument SQLAlchemy if engine exists
+if engine is not None:
+    try:
+        logfire.instrument_sqlalchemy(engine=engine)
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: verify DB connectivity (Neon pooled)
+    if engine is not None:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logfire.info("neon: connected", engine=str(engine.url).split("@")[-1][:40])
+        except Exception as e:
+            logfire.warn("neon: startup check failed", error=str(e))
+    yield
+
+
 # --- FastAPI ---
 app = FastAPI(
     title="Splicer",
     description="Movie recap pipeline API — concurrent proxy, scenes, safety, script, TTS, assemble",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 logfire.instrument_fastapi(app)
@@ -108,6 +140,22 @@ class HealthOut(BaseModel):
     version: str
 
 
+class FilmIn(BaseModel):
+    title: str
+    year: int | None = None
+    director: str | None = None
+
+
+class FilmOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    year: int | None
+    director: str | None
+
+    class Config:
+        from_attributes = True
+
+
 # --- Routes ---
 @app.get("/", response_model=HealthOut, tags=["system"])
 def root():
@@ -118,6 +166,33 @@ def root():
 @app.get("/health", response_model=HealthOut, tags=["system"])
 def health():
     return HealthOut(status="ok", service="splicer", version="0.1.0")
+
+
+@app.get("/health/db", tags=["system"])
+def health_db(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        # Count films as sanity
+        count = db.query(Film).count()
+        return {"status": "ok", "neon": "connected", "films": count}
+    except Exception as e:
+        logfire.error("db health failed", error=str(e))
+        raise HTTPException(status_code=503, detail=f"db unavailable: {e}")
+
+
+@app.post("/api/films", response_model=FilmOut, tags=["films"])
+def create_film(data: FilmIn, db: Session = Depends(get_db)):
+    logfire.info("create_film", title=data.title)
+    film = Film(title=data.title, year=data.year, director=data.director)
+    db.add(film)
+    db.commit()
+    db.refresh(film)
+    return film
+
+
+@app.get("/api/films", response_model=list[FilmOut], tags=["films"])
+def list_films(db: Session = Depends(get_db)):
+    return db.query(Film).order_by(Film.created_at.desc()).limit(50).all()
 
 
 @app.post("/api/hello", tags=["pipeline"])
@@ -131,7 +206,12 @@ async def trigger_hello(data: HelloIn):
         logfire.warn("inngest send failed — dev server not running?", error=str(e))
         # In dev without `inngest dev` running, still return 202 so the API is testable
         return JSONResponse(
-            {"queued": False, "warning": "Inngest dev server not reachable — start `inngest dev -u http://localhost:8000/api/inngest`", "error": str(e), "data": data.model_dump()},
+            {
+                "queued": False,
+                "warning": "Inngest dev server not reachable — start `inngest dev -u http://localhost:8000/api/inngest`",
+                "error": str(e),
+                "data": data.model_dump(),
+            },
             status_code=202,
         )
 
