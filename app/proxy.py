@@ -127,6 +127,36 @@ def transcode_480p_local(src_path: str, dst_path: str) -> dict:
     return {"src": src_path, "dst": dst_path, "probe": info, "nvenc": tried_nvenc}
 
 
+def _download_s3_with_fallback(s3, bucket: str, key: str, dest: pathlib.Path) -> None:
+    """Download S3 key to dest, handling RunPod HeadObject 403 via streaming get_object."""
+    try:
+        s3.download_file(bucket, key, str(dest))
+        return
+    except Exception as e:
+        # HeadObject 403 on RunPod S3 — fallback to streaming get_object which works for download
+        err = str(e)
+        if "403" in err or "Forbidden" in err:
+            try:
+                # verify existence via list
+                lst = s3.list_objects_v2(Bucket=bucket, Prefix=key)
+                found = any(o["Key"] == key for o in lst.get("Contents", []))
+                if not found:
+                    raise FileNotFoundError(f"S3 key not found via list: {key}")
+                # stream via get_object (bypasses HeadObject check for download)
+                resp = s3.get_object(Bucket=bucket, Key=key)
+                body = resp["Body"]
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = body.read(8 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                return
+            except Exception as e2:
+                raise RuntimeError(f"S3 download fallback failed for {key}: {e2}") from e2
+        raise
+
+
 def transcode_480p_s3(s3_key: str, proxy_key: str | None = None) -> dict:
     """Fetch s3_key from volume S3 to temp, transcode, upload proxy, return proxy_key.
 
@@ -144,11 +174,11 @@ def transcode_480p_s3(s3_key: str, proxy_key: str | None = None) -> dict:
     dst_vol = _s3_key_to_volume_path(proxy_key)
     if src_vol.exists():
         return transcode_480p_volume(src_vol, dst_vol, proxy_key, bucket)
-    # fallback: download via S3
+    # fallback: download via S3 with 403 fallback
     with tempfile.TemporaryDirectory() as tmp:
         tmp_src = pathlib.Path(tmp) / "src.mp4"
         tmp_dst = pathlib.Path(tmp) / "dst.mp4"
-        s3.download_file(bucket, s3_key, str(tmp_src))
+        _download_s3_with_fallback(s3, bucket, s3_key, tmp_src)
         result = transcode_480p_local(str(tmp_src), str(tmp_dst))
         s3.upload_file(str(tmp_dst), bucket, proxy_key)
         result["s3_key"] = s3_key
