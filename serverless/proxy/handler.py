@@ -9,8 +9,6 @@
 import os
 import pathlib
 import subprocess
-
-# Ensure app is importable when handler is copied into image root
 import sys
 
 import runpod  # type: ignore
@@ -130,4 +128,7 @@ def handler(job: dict) -> dict:
             return {"error": str(e2), "original_error": str(e), "s3_key": s3_key, "proxy_key": proxy_key}
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == "__main__":
+    import runpod  # type: ignore
+
+    runpod.serverless.start({"handler": handler})
