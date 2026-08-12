@@ -27,9 +27,8 @@ whiteboard.md
 .logs/
 .ruff_cache/
 
-
 .pi
-
+.codegraph/
 
 whiteboard.md
 

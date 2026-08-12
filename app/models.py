@@ -97,7 +97,7 @@ class Asset(Base):
     datacenter = Column(String(50), nullable=True)  # EU-RO-1
     size_bytes = Column(Integer, nullable=True)
     duration_sec = Column(Integer, nullable=True)
-    codec = Column(String(50), nullable=True)
+    codec = Column(String(500), nullable=True)
     status = Column(String(50), nullable=False, default="available")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
