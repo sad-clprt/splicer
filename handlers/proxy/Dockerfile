@@ -1,15 +1,27 @@
-FROM runpod/base:0.6.2-cuda12.1.0
+# Optimized Dockerfile using NVIDIA CUDA runtime base (lighter than runpod/base)
+FROM nvidia/cuda:13.3.1-runtime-ubuntu24.04
+
+# Install system dependencies (python3.12 ships with ubuntu24.04)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast package installation
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
-# Install dependencies
-RUN pip install runpod boto3 python-dotenv
+# Copy dependency specification
+COPY requirements.txt .
 
-# Copy handler
-COPY handler.py /app/
+# Install Python packages with uv (10-100x faster than pip)
+RUN uv pip install --system -r requirements.txt
 
-# Verify ffmpeg has NVENC support
-RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep h264_nvenc || \
-    (echo "ERROR: ffmpeg does not have h264_nvenc encoder support" && exit 1)
+# Copy handler code
+COPY handler.py .
 
+# RunPod serverless entrypoint
 CMD ["python3", "-u", "/app/handler.py"]
