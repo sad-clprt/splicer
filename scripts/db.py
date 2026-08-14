@@ -1,7 +1,7 @@
-"""SQLite helper for splicer pipeline.
+"""SQLite helper for splicer consecutive pipeline.
 
 All heavy work stays on RunPod; this DB is only pointers + job mirror.
-No ORM — raw sqlite3. File lives at src/splicer.db (can be recreated).
+No ORM — raw sqlite3. File lives at scripts/application.db (can be recreated).
 
 Tables:
   films(id TEXT PK, title TEXT, year INT, metadata_json TEXT, duration_sec INT, created_at TEXT, updated_at TEXT)
@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC
 from datetime import datetime
 
-DB_PATH = pathlib.Path(__file__).parent / "splicer.db"
+DB_PATH = pathlib.Path(__file__).parent / "application.db"
 
 
 def _now() -> str:
@@ -62,7 +62,7 @@ def init_db(conn: sqlite3.Connection | None = None, db_path: pathlib.Path | str 
             film_id TEXT NOT NULL REFERENCES films(id) ON DELETE CASCADE,
             kind TEXT NOT NULL CHECK(kind IN (
                 'source_1080p','proxy_480p','final_1080p','subtitle',
-                'audio_enrich','vlm','script','tts','edit_decision','safety','thumbnail','kb_enrich'
+                'audio_enrich','vlm','script','tts','edit_decision','safety','thumbnail'
             )),
             s3_key TEXT NOT NULL,
             bucket TEXT,
@@ -176,7 +176,6 @@ def insert_job(
     runpod_job_id: str | None = None,
     error: str | None = None,
 ) -> str:
-    """Insert a new job record, return job id."""
     jid = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO jobs (id, film_id, video_id, kind, status, runpod_job_id, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -192,7 +191,6 @@ def update_job(
     runpod_job_id: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Update job fields."""
     sets = []
     vals: list = []
     if status is not None:
@@ -213,13 +211,11 @@ def update_job(
 
 
 def get_asset_by_key(conn: sqlite3.Connection, s3_key: str) -> sqlite3.Row | None:
-    """Retrieve asset by s3_key."""
     cur = conn.execute("SELECT * FROM assets WHERE s3_key=?", (s3_key,))
     return cur.fetchone()
 
 
 def get_assets_for_film(conn: sqlite3.Connection, film_id: str) -> list[sqlite3.Row]:
-    """Retrieve all assets for a film."""
     cur = conn.execute("SELECT * FROM assets WHERE film_id=? ORDER BY created_at", (film_id,))
     return cur.fetchall()
 

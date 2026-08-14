@@ -72,6 +72,7 @@ def shieldstral_score(
 
 def run_safety_on_final(film_id: str, final_s3_key: str | None = None) -> dict:
     from app.s3 import VOLUME_ID
+    from app.s3 import download_s3_with_fallback
     from app.s3 import get_s3_client
 
     bucket = VOLUME_ID
@@ -83,7 +84,7 @@ def run_safety_on_final(film_id: str, final_s3_key: str | None = None) -> dict:
     if not local_src:
         tmp_dl = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         try:
-            s3.download_file(bucket, final_key, tmp_dl.name)
+            download_s3_with_fallback(s3, bucket, final_key, tmp_dl.name)
             local_src = tmp_dl.name
         except Exception as e:
             # final not yet exists — run on proxy as placeholder or stub
@@ -141,7 +142,7 @@ def run_safety_on_final(film_id: str, final_s3_key: str | None = None) -> dict:
         try:
             edl_key = f"films/{film_id}/edit_decision.json"
             tmp_edl = pathlib.Path(tmp) / "edl.json"
-            s3.download_file(bucket, edl_key, str(tmp_edl))
+            download_s3_with_fallback(s3, bucket, edl_key, tmp_edl)
             edl = json.loads(tmp_edl.read_text())
             edl["safety_flags"] = flags
             tmp_edl.write_text(json.dumps(edl, indent=2))

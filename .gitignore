@@ -32,3 +32,12 @@ whiteboard.md
 
 whiteboard.md
 
+# Test artifacts
+.pytest_cache/
+
+# SQLite databases
+*.db
+*.db-*
+
+# MCP config (contains API keys)
+.mcp.json

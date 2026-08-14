@@ -135,6 +135,7 @@ def run_hierarchical_vlm(
     film_id: str, src_s3_key: str, audio_enrich_key: str | None = None
 ) -> dict:
     from app.s3 import VOLUME_ID
+    from app.s3 import download_s3_with_fallback
     from app.s3 import get_s3_client
 
     bucket = VOLUME_ID
@@ -144,7 +145,7 @@ def run_hierarchical_vlm(
     tmp_download = None
     if not local_src:
         tmp_download = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        s3.download_file(bucket, src_s3_key, tmp_download.name)
+        download_s3_with_fallback(s3, bucket, src_s3_key, tmp_download.name)
         local_src = tmp_download.name
     # load audio scenes for stage2
     scenes = [{"id": 0, "start_sec": 0, "end_sec": 5400}]
@@ -152,7 +153,7 @@ def run_hierarchical_vlm(
     if audio_enrich_key:
         try:
             tmp_json = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            s3.download_file(bucket, audio_enrich_key, tmp_json.name)
+            download_s3_with_fallback(s3, bucket, audio_enrich_key, tmp_json.name)
             j = json.loads(pathlib.Path(tmp_json.name).read_text())
             scenes = j.get("scenes", scenes)
         except Exception:

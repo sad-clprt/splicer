@@ -87,6 +87,7 @@ def build_edit_decision(film_id: str, fps: int = 24) -> dict:
     from app.models import Film
     from app.models import Video
     from app.s3 import VOLUME_ID
+    from app.s3 import download_s3_with_fallback
     from app.s3 import get_s3_client
 
     s3 = get_s3_client()
@@ -105,14 +106,14 @@ def build_edit_decision(film_id: str, fps: int = 24) -> dict:
         scenes = []
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            s3.download_file(bucket, f"films/{film_id}/audio_enrich.json", tmp.name)
+            download_s3_with_fallback(s3, bucket, f"films/{film_id}/audio_enrich.json", tmp.name)
             scenes = json.loads(pathlib.Path(tmp.name).read_text()).get("scenes", [])
         except Exception:
             scenes = []
         safety = []
         try:
             tmp2 = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            s3.download_file(bucket, f"films/{film_id}/safety_flags.json", tmp2.name)
+            download_s3_with_fallback(s3, bucket, f"films/{film_id}/safety_flags.json", tmp2.name)
             safety = json.loads(pathlib.Path(tmp2.name).read_text())
             if isinstance(safety, dict):
                 safety = safety.get("flags", [])

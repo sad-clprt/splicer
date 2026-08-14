@@ -24,6 +24,7 @@ unfixable = []
 [lint.per-file-ignores]
 "tests/**" = ["S101", "PLR0913", "ARG"]
 "__init__.py" = ["F401", "E402"]
+"scripts/**" = ["E402", "I001", "F401", "E501", "SIM"]
 
 [lint.isort]
 force-single-line = true

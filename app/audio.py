@@ -168,6 +168,7 @@ def diarize(wav_path: str) -> list:
 def enrich_audio_for_film(film_id: str, src_s3_key: str, srt_s3_key: str | None = None) -> dict:
     """Main entry — downloads via volume or S3, runs enrichment, uploads JSON."""
     from app.s3 import VOLUME_ID
+    from app.s3 import download_s3_with_fallback
     from app.s3 import get_s3_client
 
     bucket = VOLUME_ID
@@ -183,7 +184,7 @@ def enrich_audio_for_film(film_id: str, src_s3_key: str, srt_s3_key: str | None 
             src_local = vol_src
             wav_local = tmp / "mono.wav"
         else:
-            s3.download_file(bucket, src_s3_key, str(src_local))
+            download_s3_with_fallback(s3, bucket, src_s3_key, src_local)
         extract_mono_wav(str(src_local), str(wav_local))
         subs = []
         if srt_s3_key:
@@ -193,7 +194,7 @@ def enrich_audio_for_film(film_id: str, src_s3_key: str, srt_s3_key: str | None 
                 subs = parse_srt(str(srt_local))
             else:
                 try:
-                    s3.download_file(bucket, srt_s3_key, str(srt_local))
+                    download_s3_with_fallback(s3, bucket, srt_s3_key, srt_local)
                     subs = parse_srt(str(srt_local))
                 except Exception:
                     subs = []

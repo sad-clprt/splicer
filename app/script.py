@@ -24,12 +24,12 @@ def _openrouter_chat(prompt: str, model: str | None = None) -> str:
         from openai import OpenAI
 
         client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-        chosen = model or os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+        chosen = model or os.getenv("OPENROUTER_MODEL", "qwen/qwen3-32b")
         resp = client.chat.completions.create(
             model=chosen,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=4000,
+            max_tokens=6000,
         )
         return resp.choices[0].message.content or ""
     except Exception as e:
@@ -69,6 +69,7 @@ def generate_script_for_film(film_id: str, video_id: str | None = None) -> dict:
     from app.models import Film
     from app.models import Video
     from app.s3 import VOLUME_ID
+    from app.s3 import download_s3_with_fallback
     from app.s3 import get_s3_client
 
     s3 = get_s3_client()
@@ -82,14 +83,14 @@ def generate_script_for_film(film_id: str, video_id: str | None = None) -> dict:
         beats = []
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            s3.download_file(bucket, f"films/{film_id}/vlm/stage3.json", tmp.name)
+            download_s3_with_fallback(s3, bucket, f"films/{film_id}/vlm/stage3.json", tmp.name)
             beats = json.loads(pathlib.Path(tmp.name).read_text()).get("beats", [])
         except Exception:
             beats = []
         audio_scenes = []
         try:
             tmp2 = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            s3.download_file(bucket, f"films/{film_id}/audio_enrich.json", tmp2.name)
+            download_s3_with_fallback(s3, bucket, f"films/{film_id}/audio_enrich.json", tmp2.name)
             audio_scenes = json.loads(pathlib.Path(tmp2.name).read_text()).get("scenes", [])
         except Exception:
             audio_scenes = []

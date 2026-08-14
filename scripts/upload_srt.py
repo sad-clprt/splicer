@@ -1,9 +1,15 @@
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv(dotenv_path="/home/samir/Projects/splicer/.env", override=True)
 from app.database import SessionLocal
-from app.models import Film, Asset
-from app.s3 import get_s3_client, VOLUME_ID, S3_ENDPOINT, s3_key_for_film
+from app.models import Asset
+from app.models import Film
+from app.s3 import S3_ENDPOINT
+from app.s3 import VOLUME_ID
+from app.s3 import get_s3_client
+from app.s3 import s3_key_for_film
 
 film_id = "945c6475-a629-4140-9968-9135d716565d"
 db = SessionLocal()

@@ -10,7 +10,11 @@ import subprocess
 import tempfile
 
 from app.s3 import VOLUME_ID
+from app.s3 import download_s3_with_fallback
 from app.s3 import get_s3_client
+
+# Backwards-compat alias — centralized helper lives in app.s3
+_download_s3_with_fallback = download_s3_with_fallback
 
 
 def _volume_root() -> pathlib.Path:
@@ -97,7 +101,7 @@ def transcode_480p_local(src_path: str, dst_path: str) -> dict:
         result = subprocess.run(cmd_nvenc, capture_output=True, text=True, timeout=600)
         if result.returncode != 0 and "cuda" in (result.stderr or "").lower():
             tried_nvenc = False
-            result = subprocess.run(cmd_x264, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd_x264, capture_output=True, text=True, timeout=3600)
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {result.stderr[-2000:]}")
     except FileNotFoundError as e:
@@ -125,36 +129,6 @@ def transcode_480p_local(src_path: str, dst_path: str) -> dict:
     except Exception:
         info = ""
     return {"src": src_path, "dst": dst_path, "probe": info, "nvenc": tried_nvenc}
-
-
-def _download_s3_with_fallback(s3, bucket: str, key: str, dest: pathlib.Path) -> None:
-    """Download S3 key to dest, handling RunPod HeadObject 403 via streaming get_object."""
-    try:
-        s3.download_file(bucket, key, str(dest))
-        return
-    except Exception as e:
-        # HeadObject 403 on RunPod S3 — fallback to streaming get_object which works for download
-        err = str(e)
-        if "403" in err or "Forbidden" in err:
-            try:
-                # verify existence via list
-                lst = s3.list_objects_v2(Bucket=bucket, Prefix=key)
-                found = any(o["Key"] == key for o in lst.get("Contents", []))
-                if not found:
-                    raise FileNotFoundError(f"S3 key not found via list: {key}")
-                # stream via get_object (bypasses HeadObject check for download)
-                resp = s3.get_object(Bucket=bucket, Key=key)
-                body = resp["Body"]
-                with open(dest, "wb") as f:
-                    while True:
-                        chunk = body.read(8 * 1024 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                return
-            except Exception as e2:
-                raise RuntimeError(f"S3 download fallback failed for {key}: {e2}") from e2
-        raise
 
 
 def transcode_480p_s3(s3_key: str, proxy_key: str | None = None) -> dict:
