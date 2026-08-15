@@ -112,7 +112,7 @@ def get_video_metadata(video_path: str) -> dict[str, Any]:
     """Get video metadata using PyNvVideoCodec decoder."""
     try:
         # Create decoder to probe the video
-        decoder = nvc.CreateDecoder(video_path, 0)
+        decoder = nvc.PyNvDecoder(video_path, gpuid=0)
         
         # Get stream info
         width = decoder.Width()
