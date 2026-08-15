@@ -16,6 +16,9 @@ COPY requirements.txt .
 # Install Python packages
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
+# Set NVIDIA driver capabilities for PyNvVideoCodec
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
 # Copy handler code
 COPY handler.py .
 
