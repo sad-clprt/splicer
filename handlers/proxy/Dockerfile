@@ -19,7 +19,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python packages with uv (10-100x faster than pip)
-RUN uv pip install --system -r requirements.txt
+RUN /root/.cargo/bin/uv pip install --system -r requirements.txt
 
 # Copy handler code
 COPY handler.py .
