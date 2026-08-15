@@ -1,179 +1,244 @@
-# Splicer
+# Splicer - Tool-Based Film Processing
 
-**90-minute film → 14-20 minute recap pipeline**
-
-Sequential Python pipeline using SQLite for state, RunPod Serverless for GPU work, and OpenRouter for script generation.
+Interactive, agent-assisted video processing pipeline for high-quality YouTube film recaps.
 
 ## Architecture
 
+**Philosophy:** Quality over automation. Each stage is a callable tool that can be executed independently, allowing human-in-the-loop refinement and iteration.
+
+## Project Structure
+
 ```
-Local orchestrator (src/main.py)
-    ↓
-SQLite (src/splicer.db) — state tracking
-    ↓
-Pipeline stages (src/00_*.py → src/10_*.py)
-    ↓
-RunPod Serverless (GPU work) + OpenRouter (script gen)
-    ↓
-RunPod S3 Network Volume (tn1qxkkw94, EU-RO-1)
-```
-
-## Pipeline Stages
-
-| Stage | File | Description | Location |
-|---|---|---|---|
-| 00 | `00_check_source.py` | Verify source 1080p exists on S3 | Local |
-| 01 | `01_proxy_generate.py` | Submit 1080p → 480p transcode job | RunPod `splicer-proxy` |
-| 02 | `02_proxy_download.py` | Poll proxy job, download result | RunPod → Local |
-| 03 | `03_audio_enrich.py` | Submit WhisperX + scene detection | RunPod `splicer-audio-hub` |
-| 04 | `04_vlm_generate.py` | Submit Qwen3-VL scene understanding | RunPod `splicer-vlm-hub` |
-| 05 | `05_script_generate.py` | Generate voiceover script (gpt-4o-mini) | Local (OpenRouter) |
-| 06 | `06_tts_generate.py` | Submit TTS for script | RunPod `splicer-tts-hub` |
-| 07 | `07_assemble.py` | Assemble video with cuts/effects (stub) | RunPod (TODO) |
-| 08 | `08_safety_run.py` | Submit Shieldstral safety check | RunPod `splicer-safety-hub` |
-| 10 | `10_verify_final.py` | Verify final output quality | Local |
-
-**Utilities:**
-- `poll_job.py` — Generic RunPod job poller for stages 03/04/06/08
-- `db.py` — SQLite helpers (films, assets, videos, jobs tables)
-- `runpod_client.py` — RunPod SDK wrapper
-- `s3.py` — S3 download/upload with 403 fallback
-- `models.py` — Pydantic data models
-
-## Setup
-
-```bash
-# Install dependencies
-uv sync
-
-# Configure environment
-cp .env.example .env
-# Fill in:
-#   RUNPOD_API_KEY
-#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-#   RUNPOD_ENDPOINT_* (5 endpoint IDs)
-#   OPENROUTER_API_KEY
-
-# Initialize database
-uv run python -m src.db
-```
-
-## Usage
-
-### Full Pipeline (when complete)
-
-```bash
-uv run python -m src.main \
-  945c6475-a629-4140-9968-9135d716565d \
-  films/945c6475-a629-4140-9968-9135d716565d/I.Am.Legend.1080p.mp4
+splicer/
+├── films/                          # Film library (gitignored except index + manifests)
+│   ├── index.db                    # SQLite index for discovery
+│   ├── .gitignore                  # Track index.db and manifests, ignore media
+│   └── {film_id}/                  # One directory per film
+│       ├── manifest.json           # State, history, metadata
+│       ├── source.mp4              # Original 1080p video
+│       ├── proxy.mp4               # 480p for analysis
+│       ├── audio/
+│       │   ├── transcript.json     # WhisperX output
+│       │   └── enrichment.json     # Audio analysis
+│       ├── visual/
+│       │   └── vlm_output.json     # Frame analysis (Qwen3-VL)
+│       ├── knowledge/
+│       │   └── context.json        # KB enrichment (cast, plot, themes)
+│       ├── script/
+│       │   ├── v1.md               # Script iterations
+│       │   ├── v2.md
+│       │   └── final.md
+│       ├── voiceover/
+│       │   ├── full.mp3            # Complete TTS output
+│       │   └── segments/           # Individual clips
+│       └── output/
+│           ├── final.mp4           # Final assembled video
+│           ├── versions/           # Previous versions
+│           └── safety_report.json
+│
+├── lib/                            # Core library
+│   ├── db.py                       # Films index database
+│   ├── film_manager.py             # Film lifecycle management
+│   └── tools/                      # Processing tools (TODO)
+│       ├── proxy.py
+│       ├── audio.py
+│       ├── knowledge.py
+│       ├── visual.py
+│       ├── script.py
+│       ├── tts.py
+│       ├── assemble.py
+│       └── safety.py
+│
+├── handlers/                       # RunPod serverless handlers
+│   └── proxy/
+│       ├── handler.py
+│       ├── Dockerfile
+│       └── requirements.txt
+│
+├── src/                            # Old pipeline (kept as backup during migration)
+└── archive/                        # Archived FastAPI/Inngest code
 ```
 
-### Individual Stages
+## Film Database
 
-```bash
-# 00: Check source exists
-uv run python -m src.00_check_source <film_id> <s3_key>
+### Index Database (`films/index.db`)
 
-# 01: Submit proxy transcode
-uv run python -m src.01_proxy_generate <film_id> <source_s3_key>
+Fast search/discovery layer for finding films:
 
-# 02: Poll and download proxy
-uv run python -m src.02_proxy_download <film_id> <job_id>
+```python
+from lib import db, film_manager
 
-# 03: Submit audio enrichment
-uv run python -m src.03_audio_enrich <film_id> <proxy_s3_key>
+# Search by title
+films = db.search_films(title="inception")
 
-# Poll audio job
-uv run python -m src.poll_job <film_id> <job_id> audio audio
+# Full-text search
+films = db.search_films(query="nolan dream thriller")
 
-# 04: Submit VLM
-uv run python -m src.04_vlm_generate <film_id> <proxy_s3_key> <audio_enrich_key>
+# Filter by status
+in_progress = db.search_films(status="in_progress")
 
-# Poll VLM job
-uv run python -m src.poll_job <film_id> <job_id> vlm vlm
-
-# 05: Generate script (local)
-uv run python -m src.05_script_generate <film_id> <vlm_key> <audio_enrich_key>
-
-# 06: Submit TTS
-uv run python -m src.06_tts_generate <film_id> <script_text>
-
-# Poll TTS job
-uv run python -m src.poll_job <film_id> <job_id> tts tts
-
-# 08: Submit safety check
-uv run python -m src.08_safety_run <film_id> <final_s3_key>
-
-# Poll safety job
-uv run python -m src.poll_job <film_id> <job_id> safety safety
-
-# 10: Verify final
-uv run python -m src.10_verify_final <film_id> <final_path>
+# Get film location
+film = db.get_film("inception_2010")
+print(film["directory_path"])  # "inception_2010/"
 ```
 
-## Database Schema
+### Manifest (`films/{film_id}/manifest.json`)
 
-```sql
--- Films metadata
-films(id, title, year, duration_sec, ...)
+Detailed state per film:
 
--- S3 assets (source, proxy, audio, vlm, script, tts, final)
-assets(id, film_id, kind, s3_key, bucket, size_bytes, status, ...)
-
--- Video outputs
-videos(id, film_id, final_asset_id, status, script, script_hash, ...)
-
--- RunPod job tracking
-jobs(id, film_id, video_id, kind, status, runpod_job_id, error, ...)
+```json
+{
+  "film_id": "inception_2010",
+  "title": "Inception",
+  "year": 2010,
+  "status": {
+    "proxy": {"status": "completed", "timestamp": "2026-08-15T18:00:00Z", "job_id": "abc123"},
+    "audio": {"status": "completed", "timestamp": "2026-08-15T18:05:00Z"},
+    "script": {"status": "completed", "version": 2, "timestamp": "2026-08-15T19:00:00Z"},
+    "voiceover": {"status": "in_progress"},
+    "assembly": {"status": "not_started"}
+  },
+  "history": [
+    {"action": "created", "timestamp": "...", "details": {}},
+    {"action": "proxy_completed", "timestamp": "...", "details": {"job_id": "abc123"}},
+    {"action": "script_regenerated", "timestamp": "...", "details": {"reason": "pacing too slow"}}
+  ],
+  "files": {
+    "source": "source.mp4",
+    "proxy": "proxy.mp4"
+  }
+}
 ```
 
-## RunPod Endpoints
+## Film Manager API
 
-| Name | ID (example) | Image | Purpose |
-|---|---|---|---|
-| splicer-proxy | `2dmz605z5wxjo1` | custom | ffmpeg h264_nvenc transcode |
-| splicer-audio-hub | `0jj6liixhjnhbh` | Hub: hapnan-whisperx | WhisperX + scene detect |
-| splicer-vlm-hub | `i5xjuwuikr335p` | Hub: worker-vllm (Qwen3-VL) | Frame → scene descriptions |
-| splicer-tts-hub | `5fb99jvt01k63a` | Hub: chatterbox | Script → audio |
-| splicer-safety-hub | `yams2crmm7o6l9` | Hub: worker-vllm (Shieldstral) | Content moderation |
+```python
+from lib import film_manager
 
-**Note:** Proxy endpoint needs cloud-built image (GitHub or Hub) — volume handlers don't execute on generic `runpod/base`.
+# Create new film
+film_id = film_manager.create_film(
+    title="Inception",
+    year=2010,
+    director="Christopher Nolan",
+    source_path=Path("~/Downloads/inception.mp4"),
+    tags=["sci-fi", "thriller"]
+)
 
-## Development
+# Get film info
+info = film_manager.get_film_info(film_id)
 
-```bash
-# Lint
-uv run ruff check src/
+# Update stage status
+film_manager.update_stage_status(
+    film_id=film_id,
+    stage="proxy",
+    status="completed",
+    details={"job_id": "abc123", "duration": 120}
+)
 
-# Format
-uv run ruff format src/
+# Get manifest
+manifest = film_manager.get_manifest(film_id)
 
-# Type check
-uv run ty src/
+# Add to history
+film_manager.add_history_entry(
+    film_id=film_id,
+    action="script_edited",
+    details={"editor": "human", "changes": "improved pacing"}
+)
 
-# Test
-uv run pytest
+# List all films
+films = film_manager.list_films(status="in_progress")
 ```
 
-## Migration from Old Structure
+## Tool-Based Workflow
 
-This replaces:
-- ~~`app/` (FastAPI modules)~~ → `src/` numbered stages
-- ~~`scripts/` (mixed pipeline)~~ → `src/` numbered stages
-- ~~FastAPI + Inngest orchestration~~ → `src/main.py` sequential
-- ~~Neon Postgres~~ → SQLite `src/splicer.db`
-- ~~OpenAI SDK~~ → OpenRouter direct
-- ~~Logfire~~ → loguru + rich
+Each pipeline component is a standalone tool that can be called independently:
 
-Old code preserved in `app/` and `scripts/` until new structure verified.
+### Example: Proxy Generation
 
-## TODO
+```python
+from lib.tools import proxy
 
-- [ ] Complete `07_assemble.py` with moviepy video editing
-- [ ] Add moviepy to dependencies
-- [ ] Integrate all stages into `main.py` orchestrator
-- [ ] Add progress bars and rich formatting to main.py
-- [ ] Write tests for each stage
-- [ ] Deploy proxy handler to RunPod (cloud build or Hub)
-- [ ] Verify full pipeline on canary film
-- [ ] Archive old `app/` and `scripts/` directories
+# Submit transcode job
+job_id = proxy.generate_proxy(film_id="inception_2010")
+
+# Poll and download when ready
+proxy_path = proxy.download_proxy(film_id="inception_2010", job_id=job_id)
+```
+
+### Example: Agent Workflow
+
+```
+User: "Start working on Inception - generate proxy and analyze audio"
+
+Agent:
+  1. Searches: db.search_films(title="inception")
+  2. Calls: proxy.generate_proxy("inception_2010")
+  3. Polls until complete
+  4. Calls: proxy.download_proxy()
+  5. Calls: audio.analyze_audio("inception_2010")
+  6. Reports: "Proxy ready at 480p. Audio analysis found 3 key dialogue scenes..."
+
+User: "Generate a script emphasizing the dream-within-dream concept"
+
+Agent: Calls script.generate_script(film_id, context="emphasize dream layers")
+
+User: "Too technical. Make it more accessible"
+
+Agent: Regenerates with adjusted prompt, saves as script/v2.md
+```
+
+## Processing Tools (TODO)
+
+Each tool operates independently and updates both manifest.json and index.db:
+
+- **proxy** - FFmpeg transcode to 480p via RunPod
+- **audio** - WhisperX transcription + timing via RunPod
+- **knowledge** - External API enrichment (cast, plot, themes)
+- **visual** - Qwen3-VL frame analysis via RunPod
+- **script** - OpenRouter/Claude script generation
+- **tts** - Text-to-speech via RunPod
+- **assemble** - MoviePy video assembly
+- **safety** - Content moderation check
+
+## RunPod Handlers
+
+Serverless handlers deployed on RunPod:
+
+- **proxy** - FFmpeg video transcoding (CUDA-accelerated)
+- **audio** - WhisperX (faster-whisper + alignment)
+- **visual** - Qwen3-VL multimodal LLM
+- **tts** - F5-TTS or similar
+
+Each handler:
+1. Receives job via RunPod SDK
+2. Processes on GPU
+3. Uploads result to S3
+4. Returns S3 path + metadata
+
+## Development Status
+
+### ✅ Completed
+- Films directory structure
+- SQLite index database with FTS
+- Film manager API (create, search, update)
+- Manifest schema and tracking
+- Git ignore configuration
+
+### 🚧 In Progress
+- Tool implementations (proxy, audio, knowledge, visual, script, tts, assemble, safety)
+- RunPod handler for proxy (Dockerfile ready, handler pending)
+
+### 📋 TODO
+- Remaining RunPod handlers (audio, visual, tts)
+- Agent integration layer
+- CLI interface
+- Full pipeline testing
+
+## Migration Notes
+
+This is a **complete architecture shift** from the old automated pipeline:
+
+**Old:** `src/` - Sequential stage_*.py scripts, fully automated SQLite pipeline  
+**New:** `lib/` - Tool-based, interactive, agent-assisted workflow
+
+The `src/` directory is kept as backup during migration. Will be cleaned up after all tools are implemented and tested.

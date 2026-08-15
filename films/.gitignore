@@ -1,0 +1,24 @@
+# Ignore all video/audio/image files
+*.mp4
+*.mp3
+*.mov
+*.avi
+*.mkv
+*.wav
+*.flac
+*.aac
+*.m4a
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# Ignore all subdirectories and their contents
+*/
+
+# BUT track the index database
+!index.db
+
+# BUT allow manifests to be tracked (override the */ rule above)
+# We need to be explicit about which files to track
+!*/manifest.json
