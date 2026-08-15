@@ -17,12 +17,41 @@ Output: {
 import os
 import pathlib
 import tempfile
+import logging
 from typing import Any
 
 import runpod
 import boto3
 from botocore.client import Config
 import PyNvVideoCodec as nvc
+
+
+# Configure structured logging
+def setup_logger(log_level=logging.INFO):
+    """Configure logger for RunPod serverless worker."""
+    log_format = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [Request: %(request_id)s] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    logger = logging.getLogger("splicer_proxy")
+    logger.setLevel(log_level)
+
+    # Console handler (RunPod captures stdout/stderr)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_format)
+
+    if not logger.handlers:
+        logger.addHandler(console_handler)
+
+    return logger
+
+
+# Initialize logger
+logger = setup_logger(log_level=logging.INFO)
+logger = logging.LoggerAdapter(logger, {"request_id": "N/A"})
+
+logger.info("Proxy handler initialized. PyNvVideoCodec loaded successfully.")
 
 
 def get_s3_client():
@@ -37,17 +66,32 @@ def get_s3_client():
     )
 
 
-def download_from_s3(s3_client, key: str, local_path: str) -> None:
+def download_from_s3(s3_client, key: str, local_path: str, logger) -> None:
     """Download file from S3 to local path."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
-    s3_client.download_file(bucket, key, local_path)
+    logger.info(f"Starting download from S3: s3://{bucket}/{key}")
+    try:
+        s3_client.download_file(bucket, key, local_path)
+        size_mb = pathlib.Path(local_path).stat().st_size / (1024 * 1024)
+        logger.info(f"Download complete: {size_mb:.2f} MB")
+    except Exception as e:
+        logger.error(f"Download failed: {e}", exc_info=True)
+        raise
 
 
-def upload_to_s3(s3_client, local_path: str, key: str) -> int:
+def upload_to_s3(s3_client, local_path: str, key: str, logger) -> int:
     """Upload file to S3, return size in bytes."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
-    s3_client.upload_file(local_path, bucket, key)
-    return pathlib.Path(local_path).stat().st_size
+    size_bytes = pathlib.Path(local_path).stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    logger.info(f"Starting upload to S3: s3://{bucket}/{key} ({size_mb:.2f} MB)")
+    try:
+        s3_client.upload_file(local_path, bucket, key)
+        logger.info(f"Upload complete: {key}")
+        return size_bytes
+    except Exception as e:
+        logger.error(f"Upload failed: {e}", exc_info=True)
+        raise
 
 
 def get_video_metadata(video_path: str) -> dict[str, Any]:
@@ -76,7 +120,7 @@ def get_video_metadata(video_path: str) -> dict[str, Any]:
         raise RuntimeError(f"Failed to probe video metadata: {e}")
 
 
-def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
+def transcode_to_480p(input_path: str, output_path: str, logger) -> dict[str, Any]:
     """Transcode video to 480p using PyNvVideoCodec hardware acceleration.
     
     Returns metadata about the output video.
@@ -94,6 +138,8 @@ def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
     }
     
     try:
+        logger.info(f"Starting transcode to 480p (preset: {encode_config['preset']}, bitrate: {encode_config['bitrate']})")
+        
         # Create transcoder with muxing (handles demux, decode, encode, mux in one)
         transcoder = nvc.Transcoder(
             input_path,
@@ -110,6 +156,12 @@ def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
         # Get metadata from output file
         metadata = get_video_metadata(output_path)
         
+        logger.info(
+            f"Transcode complete: {metadata['width']}x{metadata['height']}, "
+            f"{metadata['duration_seconds']:.2f}s, "
+            f"{metadata['num_frames']} frames @ {metadata['framerate']:.2f} fps"
+        )
+        
         return {
             "width": metadata["width"],
             "height": metadata["height"],
@@ -117,16 +169,29 @@ def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
         }
         
     except Exception as e:
+        logger.error(f"PyNvVideoCodec transcode failed: {e}", exc_info=True)
         raise RuntimeError(f"PyNvVideoCodec transcode failed: {e}")
 
 
 def handler(job: dict) -> dict[str, Any]:
     """RunPod serverless handler for proxy generation."""
+    # Extract request_id from job for structured logging
+    request_id = job.get("id", "unknown")
+    
+    # Create request-specific logger
+    request_logger = logging.LoggerAdapter(
+        logging.getLogger("splicer_proxy"),
+        {"request_id": request_id}
+    )
+    
+    request_logger.info("Handler started")
+    
     inp = job.get("input", {})
     s3_key = inp.get("s3_key")
     proxy_key = inp.get("proxy_key")
 
     if not s3_key:
+        request_logger.error("Missing s3_key in input")
         return {"error": "missing s3_key in input"}
 
     # Generate proxy key if not provided
@@ -137,31 +202,38 @@ def handler(job: dict) -> dict[str, Any]:
         else:
             base = s3_key.rsplit(".", 1)[0]
             proxy_key = f"{base}_480p_proxy.mp4"
+    
+    request_logger.info(f"Input: s3_key={s3_key}, output: proxy_key={proxy_key}")
 
-    s3_client = get_s3_client()
+    try:
+        s3_client = get_s3_client()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Download source video
-        input_path = os.path.join(tmpdir, "source.mp4")
-        print(f"Downloading {s3_key}...")
-        download_from_s3(s3_client, s3_key, input_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Download source video
+            input_path = os.path.join(tmpdir, "source.mp4")
+            download_from_s3(s3_client, s3_key, input_path, request_logger)
 
-        # Transcode to 480p using PyNvVideoCodec
-        output_path = os.path.join(tmpdir, "proxy_480p.mp4")
-        print(f"Transcoding to 480p with PyNvVideoCodec...")
-        metadata = transcode_to_480p(input_path, output_path)
+            # Transcode to 480p using PyNvVideoCodec
+            output_path = os.path.join(tmpdir, "proxy_480p.mp4")
+            metadata = transcode_to_480p(input_path, output_path, request_logger)
 
-        # Upload to S3
-        print(f"Uploading to {proxy_key}...")
-        size_bytes = upload_to_s3(s3_client, output_path, proxy_key)
+            # Upload to S3
+            size_bytes = upload_to_s3(s3_client, output_path, proxy_key, request_logger)
 
-        return {
-            "proxy_key": proxy_key,
-            "width": metadata["width"],
-            "height": metadata["height"],
-            "duration_seconds": metadata["duration_seconds"],
-            "size_bytes": size_bytes,
-        }
+            result = {
+                "proxy_key": proxy_key,
+                "width": metadata["width"],
+                "height": metadata["height"],
+                "duration_seconds": metadata["duration_seconds"],
+                "size_bytes": size_bytes,
+            }
+            
+            request_logger.info(f"Handler completed successfully: {result}")
+            return result
+    
+    except Exception as e:
+        request_logger.error(f"Handler failed with error: {e}", exc_info=True)
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
