@@ -43,6 +43,127 @@ def head_object_safe(s3, bucket: str, key: str):
         return None
 
 
+def upload_file_to_s3(s3, bucket: str, local_path: str | pathlib.Path, key: str) -> dict:
+    """Upload local file to S3 with multipart upload for large files.
+
+    Args:
+        s3: boto3 S3 client (from ``get_s3_client``).
+        bucket: volume/bucket ID (e.g. ``tn1qxkkw94``).
+        local_path: local file path to upload (str or Path).
+        key: destination S3 key (e.g. ``films/<id>/1080p.mp4``).
+
+    Returns:
+        dict with upload metadata: {"key": str, "size_bytes": int, "etag": str}
+
+    Raises:
+        FileNotFoundError: local file does not exist
+        RuntimeError: upload failed
+    """
+    local_file = pathlib.Path(local_path)
+    if not local_file.exists():
+        raise FileNotFoundError(f"Local file not found: {local_file}")
+
+    try:
+        file_size = local_file.stat().st_size
+        chunk_size = 100 * 1024 * 1024  # 100MB chunks
+
+        # Use multipart upload for files > 100MB
+        if file_size > chunk_size:
+            return _multipart_upload(s3, bucket, local_file, key, chunk_size, file_size)
+
+        # Simple upload for small files
+        with open(local_file, "rb") as f:
+            response = s3.put_object(Bucket=bucket, Key=key, Body=f)
+
+        return {
+            "key": key,
+            "size_bytes": file_size,
+            "etag": response.get("ETag", "").strip('"'),
+        }
+    except Exception as e:
+        raise RuntimeError(f"S3 upload failed for {key}: {e}") from e
+
+
+def _multipart_upload(s3, bucket: str, local_file: pathlib.Path, key: str, chunk_size: int, file_size: int) -> dict:
+    """Upload large file using S3 multipart upload."""
+    # Initiate multipart upload
+    mpu = s3.create_multipart_upload(Bucket=bucket, Key=key)
+    upload_id = mpu["UploadId"]
+
+    parts = []
+    part_num = 1
+
+    try:
+        with open(local_file, "rb") as f:
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+
+                # Upload part
+                response = s3.upload_part(
+                    Bucket=bucket,
+                    Key=key,
+                    PartNumber=part_num,
+                    UploadId=upload_id,
+                    Body=data,
+                )
+
+                parts.append({"PartNumber": part_num, "ETag": response["ETag"]})
+
+                # Progress feedback
+                uploaded_mb = part_num * chunk_size / (1024 * 1024)
+                total_mb = file_size / (1024 * 1024)
+                print(f"  Uploaded part {part_num}: {uploaded_mb:.0f}/{total_mb:.0f} MB")
+
+                part_num += 1
+
+        # Complete multipart upload
+        result = s3.complete_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            UploadId=upload_id,
+            MultipartUpload={"Parts": parts},
+        )
+
+        return {
+            "key": key,
+            "size_bytes": file_size,
+            "etag": result.get("ETag", "").strip('"'),
+        }
+
+    except Exception as e:
+        # Abort multipart upload on failure
+        s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        raise RuntimeError(f"Multipart upload failed for {key}: {e}") from e
+
+
+def list_s3_objects(s3, bucket: str, prefix: str = "", max_keys: int = 1000) -> list[dict]:
+    """List objects in S3 bucket with given prefix.
+
+    Args:
+        s3: boto3 S3 client (from ``get_s3_client``).
+        bucket: volume/bucket ID (e.g. ``tn1qxkkw94``).
+        prefix: filter objects by prefix (e.g. ``films/``).
+        max_keys: maximum objects to return (default 1000).
+
+    Returns:
+        list of dicts with keys: {"key": str, "size_bytes": int, "last_modified": str}
+    """
+    try:
+        response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=max_keys)
+        objects = []
+        for obj in response.get("Contents", []):
+            objects.append({
+                "key": obj["Key"],
+                "size_bytes": obj["Size"],
+                "last_modified": obj["LastModified"].isoformat(),
+            })
+        return objects
+    except Exception as e:
+        raise RuntimeError(f"S3 list failed for prefix {prefix}: {e}") from e
+
+
 def download_s3_with_fallback(s3, bucket: str, key: str, dest: str | pathlib.Path) -> None:
     """Download S3 key to dest, handling RunPod HeadObject 403 via list + streaming get_object.
 
