@@ -8,17 +8,48 @@ import boto3
 from botocore.exceptions import ClientError
 
 
-def get_s3_client():
+def get_s3_client(use_api_key: bool = False):
     """Get configured S3 client for Runpod network volume.
 
-    Returns boto3 S3 client configured with Runpod credentials.
+    Supports two credential modes:
+    1. Internal (default): Uses AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+       - Works only from within Runpod infrastructure (serverless workers, pods)
+    2. External: Uses S3_ACESS_KEY/S3_SECRET_ACCESS_KEY
+       - Works from external environments (local machine, CI/CD)
+       - Requires S3 API key created in Runpod console Settings
+
+    Args:
+        use_api_key: If True, use S3 API key credentials for external access.
+                    If False (default), use endpoint environment variables.
+                    Auto-detects and falls back if credentials are missing.
+
+    Returns:
+        boto3 S3 client configured with Runpod credentials.
     """
+    # Determine which credentials to use
+    if use_api_key:
+        # External S3 API key credentials
+        access_key = os.getenv("S3_ACESS_KEY")
+        secret_key = os.getenv("S3_SECRET_ACCESS_KEY")
+        if not access_key or not secret_key:
+            # Fallback to internal credentials if API key not available
+            access_key = os.getenv("AWS_ACCESS_KEY_ID")
+            secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    else:
+        # Internal endpoint credentials (default)
+        access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+        # Fallback to S3 API key if internal credentials not available
+        if not access_key or not secret_key:
+            access_key = os.getenv("S3_ACESS_KEY")
+            secret_key = os.getenv("S3_SECRET_ACCESS_KEY")
+
     return boto3.client(
         "s3",
         endpoint_url=os.getenv("AWS_S3_ENDPOINT", "https://s3api-eu-ro-1.runpod.io"),
         region_name=os.getenv("AWS_S3_REGION", "EU-RO-1"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
     )
 
 
@@ -85,6 +116,7 @@ def download_file(
     s3_key: str,
     local_path: str,
     bucket: Optional[str] = None,
+    use_api_key: bool = False,
 ) -> dict:
     """Download a file from S3.
 
@@ -92,6 +124,7 @@ def download_file(
         s3_key: S3 object key to download
         local_path: Local path to save file to
         bucket: S3 bucket name (defaults to RUNPOD_VOLUME_ID env var)
+        use_api_key: If True, use S3 API key for external access
 
     Returns:
         Dict with download results including size_bytes
@@ -104,13 +137,18 @@ def download_file(
         if not bucket:
             raise ValueError("bucket must be provided or RUNPOD_VOLUME_ID must be set")
 
-    s3_client = get_s3_client()
+    s3_client = get_s3_client(use_api_key=use_api_key)
 
     # Ensure parent directory exists
     pathlib.Path(local_path).parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        s3_client.download_file(bucket, s3_key, local_path)
+        # Use get_object for better compatibility with S3 API keys
+        response = s3_client.get_object(Bucket=bucket, Key=s3_key)
+        
+        # Write file manually
+        with open(local_path, "wb") as f:
+            f.write(response["Body"].read())
 
         size_bytes = pathlib.Path(local_path).stat().st_size
 

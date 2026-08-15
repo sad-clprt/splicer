@@ -13,16 +13,17 @@ import runpod
 from dotenv import load_dotenv
 
 from ..film_manager import get_film_dir, get_manifest, update_stage_status
-
-# Import S3 utilities from src (will move to lib later during cleanup)
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-from s3 import get_s3_client, s3_key_for_film, download_s3_with_fallback
+from . import storage
 
 load_dotenv()
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_PROXY")
 VOLUME_ID = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
+
+
+def s3_key_for_film(film_id: str, filename: str) -> str:
+    """Generate S3 key for a film file."""
+    return f"films/{film_id}/{filename}"
 
 
 def generate_proxy(film_id: str) -> str:
@@ -50,11 +51,10 @@ def generate_proxy(film_id: str) -> str:
         raise FileNotFoundError(f"Source file not found: {source_path}")
 
     # Upload source to S3 if not already there
-    s3_client = get_s3_client()
     s3_key = s3_key_for_film(film_id, source_file)
     
     print(f"Uploading {source_path.name} to S3...")
-    s3_client.upload_file(str(source_path), VOLUME_ID, s3_key)
+    storage.upload_file(str(source_path), s3_key, bucket=VOLUME_ID)
     print(f"Uploaded to s3://{VOLUME_ID}/{s3_key}")
 
     # Submit job to RunPod
@@ -148,8 +148,7 @@ def download_proxy(film_id: str, proxy_key: str) -> Path:
     proxy_path = get_film_dir(film_id) / "proxy_480p.mp4"
     
     print(f"Downloading proxy from S3...")
-    s3_client = get_s3_client()
-    download_s3_with_fallback(s3_client, VOLUME_ID, proxy_key, proxy_path)
+    storage.download_file(proxy_key, str(proxy_path), bucket=VOLUME_ID, use_api_key=True)
     
     print(f"Downloaded to {proxy_path}")
 
