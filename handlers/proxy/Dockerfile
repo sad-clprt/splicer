@@ -14,7 +14,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python packages
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy handler code
 COPY handler.py .
