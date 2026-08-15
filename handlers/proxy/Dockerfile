@@ -1,6 +1,6 @@
 # Optimized Dockerfile using NVIDIA CUDA runtime base (lighter than runpod/base)
-# CUDA 12.4.1 + Ubuntu 24.04 + Python 3.12 (RunPod compatibility: hosts with CUDA 12.4+ drivers)
-FROM nvidia/cuda:12.4.1-runtime-ubuntu24.04
+# CUDA 12.5.1 + Ubuntu 24.04 + Python 3.12 (RunPod compatibility: hosts with CUDA 12.5+ drivers)
+FROM nvidia/cuda:12.5.1-runtime-ubuntu24.04
 
 # Install system dependencies (python3.12 ships with ubuntu24.04)
 RUN apt-get update && apt-get install -y \
