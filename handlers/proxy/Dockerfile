@@ -1,4 +1,5 @@
 # Optimized Dockerfile using NVIDIA CUDA runtime base (lighter than runpod/base)
+# CUDA 13.3.1 + Ubuntu 24.04 + Python 3.12 + uv for fast package installation
 FROM nvidia/cuda:13.3.1-runtime-ubuntu24.04
 
 # Install system dependencies (python3.12 ships with ubuntu24.04)
