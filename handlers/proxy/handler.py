@@ -22,12 +22,12 @@ from typing import Any
 
 import runpod
 import PyNvVideoCodec as nvc
+import boto3
+from botocore.exceptions import ClientError
 
 # Add parent directory to path for lib imports
 import sys
 sys.path.insert(0, '/app')
-
-from lib.tools import storage
 
 
 # Configure structured logging
@@ -58,14 +58,34 @@ logger = logging.LoggerAdapter(logger, {"request_id": "N/A"})
 logger.info("Proxy handler initialized. PyNvVideoCodec loaded successfully.")
 
 
+def get_s3_client():
+    """Get configured S3 client for Runpod network volume."""
+    return boto3.client(
+        "s3",
+        endpoint_url=os.getenv("AWS_S3_ENDPOINT", "https://s3api-eu-ro-1.runpod.io"),
+        region_name=os.getenv("AWS_S3_REGION", "EU-RO-1"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+
+
 def download_from_s3(key: str, local_path: str, logger) -> None:
     """Download file from S3 to local path."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
     logger.info(f"Starting download from S3: s3://{bucket}/{key}")
+    
+    s3_client = get_s3_client()
+    pathlib.Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+    
     try:
-        result = storage.download_file(key, local_path, bucket)
-        logger.info(f"Download complete: {result['size_mb']:.2f} MB")
-    except Exception as e:
+        # Use get_object and write manually for better compatibility
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        with open(local_path, "wb") as f:
+            f.write(response["Body"].read())
+        
+        size_mb = pathlib.Path(local_path).stat().st_size / (1024 * 1024)
+        logger.info(f"Download complete: {size_mb:.2f} MB")
+    except ClientError as e:
         logger.error(f"Download failed: {e}", exc_info=True)
         raise
 
@@ -76,11 +96,14 @@ def upload_to_s3(local_path: str, key: str, logger) -> int:
     size_bytes = pathlib.Path(local_path).stat().st_size
     size_mb = size_bytes / (1024 * 1024)
     logger.info(f"Starting upload to S3: s3://{bucket}/{key} ({size_mb:.2f} MB)")
+    
+    s3_client = get_s3_client()
+    
     try:
-        result = storage.upload_file(local_path, key, bucket)
+        s3_client.upload_file(str(local_path), bucket, key)
         logger.info(f"Upload complete: {key}")
-        return result['size_bytes']
-    except Exception as e:
+        return size_bytes
+    except ClientError as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
         raise
 
