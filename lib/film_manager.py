@@ -22,23 +22,24 @@ FILMS_DIR = Path(__file__).parent.parent / "films"
 
 def generate_film_id(title: str, year: Optional[int] = None) -> str:
     """
-    Generate film ID from title and year.
+    Generate film ID from title and short UUID.
 
     Examples:
-        "Inception", 2010 -> "inception_2010"
-        "The Matrix" -> "the_matrix_{uuid4}"
+        "Inception" -> "inception_a3f2c8d1"
+        "The Matrix" -> "the_matrix_9e2f8d7c"
+        "I Am Legend" -> "i_am_legend_c8d14b5e"
+
+    Always includes 8-character UUID for guaranteed uniqueness.
+    Year parameter is ignored but kept for API compatibility.
     """
     # Slugify title
     slug = title.lower()
     slug = "".join(c if c.isalnum() or c.isspace() else "" for c in slug)
     slug = "_".join(slug.split())
 
-    if year:
-        return f"{slug}_{year}"
-    else:
-        # No year provided, use short UUID suffix
-        short_uuid = str(uuid.uuid4())[:8]
-        return f"{slug}_{short_uuid}"
+    # Always append short UUID for guaranteed uniqueness
+    short_uuid = str(uuid.uuid4()).replace("-", "")[:8]
+    return f"{slug}_{short_uuid}"
 
 
 def create_film(
