@@ -16,14 +16,13 @@ Output: {
 
 import os
 import pathlib
-import subprocess
-import json
 import tempfile
 from typing import Any
 
 import runpod
 import boto3
 from botocore.client import Config
+import PyNvVideoCodec as nvc
 
 
 def get_s3_client():
@@ -51,77 +50,74 @@ def upload_to_s3(s3_client, local_path: str, key: str) -> int:
     return pathlib.Path(local_path).stat().st_size
 
 
-def probe_video(video_path: str) -> dict[str, Any]:
-    """Get video metadata using ffprobe."""
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,duration,codec_name,avg_frame_rate",
-        "-show_entries", "format=duration",
-        "-of", "json",
-        video_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {result.stderr}")
+def get_video_metadata(video_path: str) -> dict[str, Any]:
+    """Get video metadata using PyNvVideoCodec decoder."""
+    try:
+        # Create decoder to probe the video
+        decoder = nvc.CreateDecoder(video_path, gpu_id=0)
+        
+        # Get stream info
+        width = decoder.Width()
+        height = decoder.Height()
+        num_frames = decoder.Numframes()
+        framerate = decoder.Framerate()
+        
+        # Calculate duration
+        duration_seconds = num_frames / framerate if framerate > 0 else 0.0
+        
+        return {
+            "width": width,
+            "height": height,
+            "duration_seconds": duration_seconds,
+            "num_frames": num_frames,
+            "framerate": framerate,
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to probe video metadata: {e}")
 
-    data = json.loads(result.stdout)
-    stream = data.get("streams", [{}])[0]
-    format_data = data.get("format", {})
 
-    return {
-        "width": stream.get("width"),
-        "height": stream.get("height"),
-        "codec": stream.get("codec_name"),
-        "duration_seconds": float(format_data.get("duration", 0)),
+def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
+    """Transcode video to 480p using PyNvVideoCodec hardware acceleration.
+    
+    Returns metadata about the output video.
+    """
+    # Encode configuration for 480p H.264
+    encode_config = {
+        "codec": "h264",           # H.264 codec
+        "s": "854x480",            # 480p resolution
+        "preset": "P4",            # Quality preset (P4 = balanced quality/speed)
+        "rc": "vbr",               # Variable bitrate
+        "bitrate": "2M",           # Average bitrate 2 Mbps
+        "maxbitrate": "4M",        # Max bitrate 4 Mbps
+        "gop": "60",               # GOP size (2 seconds at 30fps)
+        "bf": "0",                 # No B-frames for faster seeking
     }
-
-
-def transcode_to_480p(input_path: str, output_path: str) -> None:
-    """Transcode video to 480p using hardware acceleration."""
-    # Try NVENC first (GPU encoding)
-    cmd_nvenc = [
-        "ffmpeg", "-y",
-        "-hwaccel", "cuda",
-        "-hwaccel_output_format", "cuda",
-        "-i", input_path,
-        "-vf", "scale_cuda=854:480",
-        "-c:v", "h264_nvenc",
-        "-preset", "p4",  # quality preset
-        "-rc", "vbr",
-        "-cq", "23",
-        "-b:v", "2M",
-        "-maxrate", "4M",
-        "-g", "30",  # GOP size
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        output_path,
-    ]
-
-    result = subprocess.run(cmd_nvenc, capture_output=True, text=True, timeout=600)
-
-    # Fallback to CPU encoding if NVENC fails
-    if result.returncode != 0 and "cuda" in result.stderr.lower():
-        print(f"NVENC failed, falling back to libx264: {result.stderr[:500]}")
-        cmd_cpu = [
-            "ffmpeg", "-y",
-            "-i", input_path,
-            "-vf", "scale=854:480",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-g", "30",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "128k",
+    
+    try:
+        # Create transcoder with muxing (handles demux, decode, encode, mux in one)
+        transcoder = nvc.Transcoder(
+            input_path,
             output_path,
-        ]
-        result = subprocess.run(cmd_cpu, capture_output=True, text=True, timeout=600)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {result.stderr[-2000:]}")
+            gpu_id=0,
+            cuda_context=0,
+            cuda_stream=0,
+            **encode_config
+        )
+        
+        # Run the full transcode with muxing
+        transcoder.transcode_with_mux()
+        
+        # Get metadata from output file
+        metadata = get_video_metadata(output_path)
+        
+        return {
+            "width": metadata["width"],
+            "height": metadata["height"],
+            "duration_seconds": metadata["duration_seconds"],
+        }
+        
+    except Exception as e:
+        raise RuntimeError(f"PyNvVideoCodec transcode failed: {e}")
 
 
 def handler(job: dict) -> dict[str, Any]:
@@ -135,8 +131,9 @@ def handler(job: dict) -> dict[str, Any]:
 
     # Generate proxy key if not provided
     if not proxy_key:
-        if "1080p" in s3_key:
-            proxy_key = s3_key.replace("1080p", "480p_proxy")
+        # Replace source.mp4 with proxy_480p.mp4
+        if s3_key.endswith("/source.mp4"):
+            proxy_key = s3_key.replace("/source.mp4", "/proxy_480p.mp4")
         else:
             base = s3_key.rsplit(".", 1)[0]
             proxy_key = f"{base}_480p_proxy.mp4"
@@ -149,14 +146,10 @@ def handler(job: dict) -> dict[str, Any]:
         print(f"Downloading {s3_key}...")
         download_from_s3(s3_client, s3_key, input_path)
 
-        # Transcode to 480p
+        # Transcode to 480p using PyNvVideoCodec
         output_path = os.path.join(tmpdir, "proxy_480p.mp4")
-        print(f"Transcoding to 480p...")
-        transcode_to_480p(input_path, output_path)
-
-        # Probe output video
-        print(f"Probing output video...")
-        metadata = probe_video(output_path)
+        print(f"Transcoding to 480p with PyNvVideoCodec...")
+        metadata = transcode_to_480p(input_path, output_path)
 
         # Upload to S3
         print(f"Uploading to {proxy_key}...")

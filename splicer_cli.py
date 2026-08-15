@@ -229,6 +229,22 @@ def proxy_download(film_id, output_url):
         sys.exit(1)
 
 
+@proxy_cmd.command("wait")
+@click.argument("film_id")
+@click.option("--poll-interval", default=10, help="Seconds between status polls")
+@click.option("--timeout", default=600, help="Maximum wait time in seconds")
+def proxy_wait(film_id, poll_interval, timeout):
+    """Generate proxy and wait for completion."""
+    try:
+        console.print(f"[cyan]Starting proxy generation for {film_id}...[/cyan]")
+        path = proxy.generate_and_wait(film_id, poll_interval=poll_interval, timeout=timeout)
+        console.print(f"[green]✓[/green] Proxy generated: {path}")
+
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error: {e}")
+        sys.exit(1)
+
+
 # ============================================================================
 # AUDIO COMMANDS
 # ============================================================================
