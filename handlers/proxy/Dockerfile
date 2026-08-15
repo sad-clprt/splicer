@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast package installation
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.cargo/bin/uv /usr/local/bin/uv
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python packages with uv (10-100x faster than pip)
-RUN /root/.cargo/bin/uv pip install --system -r requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 # Copy handler code
 COPY handler.py .
