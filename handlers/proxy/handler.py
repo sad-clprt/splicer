@@ -21,9 +21,13 @@ import logging
 from typing import Any
 
 import runpod
-import boto3
-from botocore.client import Config
 import PyNvVideoCodec as nvc
+
+# Add parent directory to path for lib imports
+import sys
+sys.path.insert(0, '/app')
+
+from lib.tools import storage
 
 
 # Configure structured logging
@@ -54,41 +58,28 @@ logger = logging.LoggerAdapter(logger, {"request_id": "N/A"})
 logger.info("Proxy handler initialized. PyNvVideoCodec loaded successfully.")
 
 
-def get_s3_client():
-    """Create S3 client for RunPod network volume storage."""
-    return boto3.client(
-        "s3",
-        endpoint_url=os.getenv("AWS_S3_ENDPOINT", "https://s3api-eu-ro-1.runpod.io"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.getenv("AWS_S3_REGION", "EU-RO-1"),
-        config=Config(signature_version="s3v4"),
-    )
-
-
-def download_from_s3(s3_client, key: str, local_path: str, logger) -> None:
+def download_from_s3(key: str, local_path: str, logger) -> None:
     """Download file from S3 to local path."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
     logger.info(f"Starting download from S3: s3://{bucket}/{key}")
     try:
-        s3_client.download_file(bucket, key, local_path)
-        size_mb = pathlib.Path(local_path).stat().st_size / (1024 * 1024)
-        logger.info(f"Download complete: {size_mb:.2f} MB")
+        result = storage.download_file(key, local_path, bucket)
+        logger.info(f"Download complete: {result['size_mb']:.2f} MB")
     except Exception as e:
         logger.error(f"Download failed: {e}", exc_info=True)
         raise
 
 
-def upload_to_s3(s3_client, local_path: str, key: str, logger) -> int:
+def upload_to_s3(local_path: str, key: str, logger) -> int:
     """Upload file to S3, return size in bytes."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
     size_bytes = pathlib.Path(local_path).stat().st_size
     size_mb = size_bytes / (1024 * 1024)
     logger.info(f"Starting upload to S3: s3://{bucket}/{key} ({size_mb:.2f} MB)")
     try:
-        s3_client.upload_file(local_path, bucket, key)
+        result = storage.upload_file(local_path, key, bucket)
         logger.info(f"Upload complete: {key}")
-        return size_bytes
+        return result['size_bytes']
     except Exception as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
         raise
@@ -206,19 +197,17 @@ def handler(job: dict) -> dict[str, Any]:
     request_logger.info(f"Input: s3_key={s3_key}, output: proxy_key={proxy_key}")
 
     try:
-        s3_client = get_s3_client()
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Download source video
             input_path = os.path.join(tmpdir, "source.mp4")
-            download_from_s3(s3_client, s3_key, input_path, request_logger)
+            download_from_s3(s3_key, input_path, request_logger)
 
             # Transcode to 480p using PyNvVideoCodec
             output_path = os.path.join(tmpdir, "proxy_480p.mp4")
             metadata = transcode_to_480p(input_path, output_path, request_logger)
 
             # Upload to S3
-            size_bytes = upload_to_s3(s3_client, output_path, proxy_key, request_logger)
+            size_bytes = upload_to_s3(output_path, proxy_key, request_logger)
 
             result = {
                 "proxy_key": proxy_key,
