@@ -17,45 +17,27 @@ Output: {
 import os
 import pathlib
 import tempfile
-import logging
+import time
 from typing import Any
 
 import runpod
 import PyNvVideoCodec as nvc
 import boto3
 from botocore.exceptions import ClientError
+import logfire
 
 # Add parent directory to path for lib imports
 import sys
 sys.path.insert(0, '/app')
 
+# Configure Logfire with service name and system metrics
+logfire.configure(
+    service_name="splicer-proxy",
+    console=False,  # Don't output to console, use Logfire UI
+)
+logfire.instrument_system_metrics()
 
-# Configure structured logging
-def setup_logger(log_level=logging.INFO):
-    """Configure logger for RunPod serverless worker."""
-    log_format = logging.Formatter(
-        '%(asctime)s - %(levelname)s - [Request: %(request_id)s] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    logger = logging.getLogger("splicer_proxy")
-    logger.setLevel(log_level)
-
-    # Console handler (RunPod captures stdout/stderr)
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_format)
-
-    if not logger.handlers:
-        logger.addHandler(console_handler)
-
-    return logger
-
-
-# Initialize logger
-logger = setup_logger(log_level=logging.INFO)
-logger = logging.LoggerAdapter(logger, {"request_id": "N/A"})
-
-logger.info("Proxy handler initialized. PyNvVideoCodec loaded successfully.")
+logfire.info("Proxy handler initialized. PyNvVideoCodec loaded successfully.")
 
 
 def get_s3_client():
@@ -69,183 +51,255 @@ def get_s3_client():
     )
 
 
-def download_from_s3(key: str, local_path: str, logger) -> None:
+def download_from_s3(key: str, local_path: str) -> None:
     """Download file from S3 to local path."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
-    logger.info(f"Starting download from S3: s3://{bucket}/{key}")
     
-    s3_client = get_s3_client()
-    pathlib.Path(local_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        # Use get_object and write manually for better compatibility
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        with open(local_path, "wb") as f:
-            f.write(response["Body"].read())
+    with logfire.span("s3_download", key=key, bucket=bucket) as span:
+        start_time = time.perf_counter()
         
-        size_mb = pathlib.Path(local_path).stat().st_size / (1024 * 1024)
-        logger.info(f"Download complete: {size_mb:.2f} MB")
-    except ClientError as e:
-        logger.error(f"Download failed: {e}", exc_info=True)
-        raise
+        s3_client = get_s3_client()
+        pathlib.Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            with open(local_path, "wb") as f:
+                f.write(response["Body"].read())
+            
+            size_bytes = pathlib.Path(local_path).stat().st_size
+            size_mb = size_bytes / (1024 * 1024)
+            duration_sec = time.perf_counter() - start_time
+            
+            span.set_attributes({
+                "size_bytes": size_bytes,
+                "size_mb": round(size_mb, 2),
+                "duration_sec": round(duration_sec, 2),
+                "speed_mbps": round(size_mb / duration_sec, 2) if duration_sec > 0 else 0,
+            })
+            
+            logfire.info(f"S3 download complete: {size_mb:.2f} MB in {duration_sec:.2f}s")
+        except ClientError as e:
+            duration_sec = time.perf_counter() - start_time
+            span.set_attribute("error", str(e))
+            span.set_attribute("duration_sec", round(duration_sec, 2))
+            logfire.error(f"S3 download failed: {e}")
+            raise
 
 
-def upload_to_s3(local_path: str, key: str, logger) -> int:
+def upload_to_s3(local_path: str, key: str) -> int:
     """Upload file to S3, return size in bytes."""
     bucket = os.getenv("RUNPOD_VOLUME_ID", "tn1qxkkw94")
     size_bytes = pathlib.Path(local_path).stat().st_size
     size_mb = size_bytes / (1024 * 1024)
-    logger.info(f"Starting upload to S3: s3://{bucket}/{key} ({size_mb:.2f} MB)")
     
-    s3_client = get_s3_client()
-    
-    try:
-        s3_client.upload_file(str(local_path), bucket, key)
-        logger.info(f"Upload complete: {key}")
-        return size_bytes
-    except ClientError as e:
-        logger.error(f"Upload failed: {e}", exc_info=True)
-        raise
+    with logfire.span("s3_upload", key=key, bucket=bucket, size_mb=round(size_mb, 2)) as span:
+        start_time = time.perf_counter()
+        
+        s3_client = get_s3_client()
+        
+        try:
+            s3_client.upload_file(str(local_path), bucket, key)
+            duration_sec = time.perf_counter() - start_time
+            
+            span.set_attributes({
+                "size_bytes": size_bytes,
+                "duration_sec": round(duration_sec, 2),
+                "speed_mbps": round(size_mb / duration_sec, 2) if duration_sec > 0 else 0,
+            })
+            
+            logfire.info(f"S3 upload complete: {size_mb:.2f} MB in {duration_sec:.2f}s")
+            return size_bytes
+        except ClientError as e:
+            duration_sec = time.perf_counter() - start_time
+            span.set_attribute("error", str(e))
+            span.set_attribute("duration_sec", round(duration_sec, 2))
+            logfire.error(f"S3 upload failed: {e}")
+            raise
 
 
 def get_video_metadata(video_path: str) -> dict[str, Any]:
     """Get video metadata using PyNvVideoCodec decoder."""
-    try:
-        # Create decoder to probe the video
-        decoder = nvc.PyNvDecoder(video_path, gpuid=0)
+    with logfire.span("get_metadata", video_path=video_path) as span:
+        start_time = time.perf_counter()
         
-        # Get stream info
-        width = decoder.Width()
-        height = decoder.Height()
-        num_frames = decoder.Numframes()
-        framerate = decoder.Framerate()
-        
-        # Calculate duration
-        duration_seconds = num_frames / framerate if framerate > 0 else 0.0
-        
-        return {
-            "width": width,
-            "height": height,
-            "duration_seconds": duration_seconds,
-            "num_frames": num_frames,
-            "framerate": framerate,
-        }
-    except Exception as e:
-        raise RuntimeError(f"Failed to probe video metadata: {e}")
+        try:
+            decoder = nvc.PyNvDecoder(video_path, gpuid=0)
+            
+            width = decoder.Width()
+            height = decoder.Height()
+            num_frames = decoder.Numframes()
+            framerate = decoder.Framerate()
+            
+            duration_seconds = num_frames / framerate if framerate > 0 else 0.0
+            probe_time = time.perf_counter() - start_time
+            
+            metadata = {
+                "width": width,
+                "height": height,
+                "duration_seconds": round(duration_seconds, 2),
+                "num_frames": num_frames,
+                "framerate": round(framerate, 2),
+            }
+            
+            span.set_attributes({
+                "width": width,
+                "height": height,
+                "duration_seconds": round(duration_seconds, 2),
+                "num_frames": num_frames,
+                "framerate": round(framerate, 2),
+                "probe_time_sec": round(probe_time, 3),
+            })
+            
+            return metadata
+        except Exception as e:
+            span.set_attribute("error", str(e))
+            logfire.error(f"Failed to probe video metadata: {e}")
+            raise RuntimeError(f"Failed to probe video metadata: {e}")
 
 
-def transcode_to_480p(input_path: str, output_path: str, logger) -> dict[str, Any]:
-    """Transcode video to 480p using PyNvVideoCodec hardware acceleration.
-    
-    Returns metadata about the output video.
-    """
-    # Encode configuration for 480p H.264
+def transcode_to_480p(input_path: str, output_path: str) -> dict[str, Any]:
+    """Transcode video to 480p using PyNvVideoCodec hardware acceleration."""
     encode_config = {
-        "codec": "h264",           # H.264 codec
-        "s": "854x480",            # 480p resolution
-        "preset": "P4",            # Quality preset (P4 = balanced quality/speed)
-        "rc": "vbr",               # Variable bitrate
-        "bitrate": "2M",           # Average bitrate 2 Mbps
-        "maxbitrate": "4M",        # Max bitrate 4 Mbps
-        "gop": "60",               # GOP size (2 seconds at 30fps)
-        "bf": "0",                 # No B-frames for faster seeking
+        "codec": "h264",
+        "s": "854x480",
+        "preset": "P4",
+        "rc": "vbr",
+        "bitrate": "2M",
+        "maxbitrate": "4M",
+        "gop": "60",
+        "bf": "0",
     }
     
-    try:
-        logger.info(f"Starting transcode to 480p (preset: {encode_config['preset']}, bitrate: {encode_config['bitrate']})")
+    with logfire.span(
+        "transcode",
+        codec=encode_config["codec"],
+        resolution=encode_config["s"],
+        preset=encode_config["preset"],
+        bitrate=encode_config["bitrate"],
+    ) as span:
+        start_time = time.perf_counter()
         
-        # Create transcoder with muxing (handles demux, decode, encode, mux in one)
-        transcoder = nvc.Transcoder(
-            input_path,
-            output_path,
-            gpu_id=0,
-            cuda_context=0,
-            cuda_stream=0,
-            **encode_config
-        )
-        
-        # Run the full transcode with muxing
-        transcoder.transcode_with_mux()
-        
-        # Get metadata from output file
-        metadata = get_video_metadata(output_path)
-        
-        logger.info(
-            f"Transcode complete: {metadata['width']}x{metadata['height']}, "
-            f"{metadata['duration_seconds']:.2f}s, "
-            f"{metadata['num_frames']} frames @ {metadata['framerate']:.2f} fps"
-        )
-        
-        return {
-            "width": metadata["width"],
-            "height": metadata["height"],
-            "duration_seconds": metadata["duration_seconds"],
-        }
-        
-    except Exception as e:
-        logger.error(f"PyNvVideoCodec transcode failed: {e}", exc_info=True)
-        raise RuntimeError(f"PyNvVideoCodec transcode failed: {e}")
+        try:
+            transcoder = nvc.Transcoder(
+                input_path,
+                output_path,
+                gpu_id=0,
+                cuda_context=0,
+                cuda_stream=0,
+                **encode_config
+            )
+            
+            transcoder.transcode_with_mux()
+            transcode_time = time.perf_counter() - start_time
+            
+            # Get output metadata
+            metadata = get_video_metadata(output_path)
+            
+            # Calculate transcoding speed
+            total_frames = metadata["num_frames"]
+            fps_achieved = total_frames / transcode_time if transcode_time > 0 else 0
+            
+            span.set_attributes({
+                "duration_sec": round(transcode_time, 2),
+                "output_frames": total_frames,
+                "fps_achieved": round(fps_achieved, 1),
+                "output_width": metadata["width"],
+                "output_height": metadata["height"],
+                "output_duration_sec": metadata["duration_seconds"],
+            })
+            
+            logfire.info(
+                f"Transcode complete: {metadata['width']}x{metadata['height']}, "
+                f"{metadata['duration_seconds']:.2f}s, {total_frames} frames @ {fps_achieved:.1f} fps"
+            )
+            
+            return {
+                "width": metadata["width"],
+                "height": metadata["height"],
+                "duration_seconds": metadata["duration_seconds"],
+            }
+            
+        except Exception as e:
+            transcode_time = time.perf_counter() - start_time
+            span.set_attribute("error", str(e))
+            span.set_attribute("duration_sec", round(transcode_time, 2))
+            logfire.error(f"PyNvVideoCodec transcode failed: {e}")
+            raise RuntimeError(f"PyNvVideoCodec transcode failed: {e}")
 
 
 def handler(job: dict) -> dict[str, Any]:
     """RunPod serverless handler for proxy generation."""
-    # Extract request_id from job for structured logging
     request_id = job.get("id", "unknown")
     
-    # Create request-specific logger
-    request_logger = logging.LoggerAdapter(
-        logging.getLogger("splicer_proxy"),
-        {"request_id": request_id}
-    )
-    
-    request_logger.info("Handler started")
-    
-    inp = job.get("input", {})
-    s3_key = inp.get("s3_key")
-    proxy_key = inp.get("proxy_key")
+    with logfire.span("proxy_generation", job_id=request_id) as main_span:
+        logfire.info("Handler started")
+        
+        inp = job.get("input", {})
+        s3_key = inp.get("s3_key")
+        proxy_key = inp.get("proxy_key")
 
-    if not s3_key:
-        request_logger.error("Missing s3_key in input")
-        return {"error": "missing s3_key in input"}
+        if not s3_key:
+            logfire.error("Missing s3_key in input")
+            return {"error": "missing s3_key in input"}
 
-    # Generate proxy key if not provided
-    if not proxy_key:
-        # Replace source.mp4 with proxy_480p.mp4
-        if s3_key.endswith("/source.mp4"):
-            proxy_key = s3_key.replace("/source.mp4", "/proxy_480p.mp4")
-        else:
-            base = s3_key.rsplit(".", 1)[0]
-            proxy_key = f"{base}_480p_proxy.mp4"
-    
-    request_logger.info(f"Input: s3_key={s3_key}, output: proxy_key={proxy_key}")
+        if not proxy_key:
+            if s3_key.endswith("/source.mp4"):
+                proxy_key = s3_key.replace("/source.mp4", "/proxy_480p.mp4")
+            else:
+                base = s3_key.rsplit(".", 1)[0]
+                proxy_key = f"{base}_480p_proxy.mp4"
+        
+        main_span.set_attributes({
+            "s3_key": s3_key,
+            "proxy_key": proxy_key,
+        })
+        
+        logfire.info(f"Input: s3_key={s3_key}, output: proxy_key={proxy_key}")
 
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Download source video
-            input_path = os.path.join(tmpdir, "source.mp4")
-            download_from_s3(s3_key, input_path, request_logger)
-
-            # Transcode to 480p using PyNvVideoCodec
-            output_path = os.path.join(tmpdir, "proxy_480p.mp4")
-            metadata = transcode_to_480p(input_path, output_path, request_logger)
-
-            # Upload to S3
-            size_bytes = upload_to_s3(output_path, proxy_key, request_logger)
-
-            result = {
-                "proxy_key": proxy_key,
-                "width": metadata["width"],
-                "height": metadata["height"],
-                "duration_seconds": metadata["duration_seconds"],
-                "size_bytes": size_bytes,
-            }
+        try:
+            job_start = time.perf_counter()
             
-            request_logger.info(f"Handler completed successfully: {result}")
-            return result
-    
-    except Exception as e:
-        request_logger.error(f"Handler failed with error: {e}", exc_info=True)
-        return {"error": str(e)}
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Download source video
+                input_path = os.path.join(tmpdir, "source.mp4")
+                download_from_s3(s3_key, input_path)
+
+                # Transcode to 480p
+                output_path = os.path.join(tmpdir, "proxy_480p.mp4")
+                metadata = transcode_to_480p(input_path, output_path)
+
+                # Upload to S3
+                size_bytes = upload_to_s3(output_path, proxy_key)
+
+                total_time = time.perf_counter() - job_start
+                
+                result = {
+                    "proxy_key": proxy_key,
+                    "width": metadata["width"],
+                    "height": metadata["height"],
+                    "duration_seconds": metadata["duration_seconds"],
+                    "size_bytes": size_bytes,
+                }
+                
+                main_span.set_attributes({
+                    "total_duration_sec": round(total_time, 2),
+                    "output_size_bytes": size_bytes,
+                    "output_size_mb": round(size_bytes / (1024 * 1024), 2),
+                    "status": "completed",
+                })
+                
+                logfire.info(f"Handler completed successfully in {total_time:.2f}s")
+                return result
+        
+        except Exception as e:
+            job_time = time.perf_counter() - job_start
+            main_span.set_attributes({
+                "error": str(e),
+                "duration_sec": round(job_time, 2),
+                "status": "failed",
+            })
+            logfire.error(f"Handler failed with error: {e}")
+            return {"error": str(e)}
 
 
 if __name__ == "__main__":
