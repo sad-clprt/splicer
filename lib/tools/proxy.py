@@ -53,7 +53,9 @@ def s3_key_for_film(film_id: str, filename: str) -> str:
     return volume_key_for_film(film_id, filename)
 
 
-def generate_proxy(film_id: str, source_filename: str | None = None, overwrite: bool = False) -> str:
+def generate_proxy(
+    film_id: str, source_filename: str | None = None, overwrite: bool = False, transcoder: str = "auto"
+) -> str:
     """
     Submit proxy generation job to Modal (async).
 
@@ -61,6 +63,7 @@ def generate_proxy(film_id: str, source_filename: str | None = None, overwrite: 
         film_id: Film identifier
         source_filename: Optional source override
         overwrite: Re-transcode even if proxy exists
+        transcoder: "auto", "pynvc", or "ffmpeg"
 
     Returns:
         call_id: Modal FunctionCall ID for polling
@@ -88,16 +91,21 @@ def generate_proxy(film_id: str, source_filename: str | None = None, overwrite: 
         # but we log for debugging
         print(f"Warning: failed to upload source to Volume: {e}")
 
+    # Validate transcoder
+    transcoder = transcoder.lower()
+    if transcoder not in ("auto", "pynvc", "ffmpeg"):
+        raise ValueError(f"Invalid transcoder '{transcoder}'. Must be one of: auto, pynvc, ffmpeg")
+
     # Spawn Modal function
     func = modal.Function.from_name("splicer", "transcode_proxy")
-    call = func.spawn(film_id, source_filename=source_file, overwrite=overwrite)
+    call = func.spawn(film_id, source_filename=source_file, overwrite=overwrite, transcoder=transcoder)
     call_id = call.object_id
 
     update_stage_status(
         film_id=film_id,
         stage="proxy",
         status="in_progress",
-        details={"call_id": call_id, "source": str(source_path), "message": "Transcoding to 480p on Modal"},
+        details={"call_id": call_id, "source": str(source_path), "transcoder": transcoder, "message": f"Transcoding to 480p on Modal via {transcoder}"},
     )
 
     return call_id
@@ -203,7 +211,7 @@ def download_proxy(film_id: str, proxy_key: str | None = None) -> Path:
 
 
 def generate_and_wait(
-    film_id: str, poll_interval: int = 10, timeout: int = 3600, overwrite: bool = False
+    film_id: str, poll_interval: int = 10, timeout: int = 3600, overwrite: bool = False, transcoder: str = "auto"
 ) -> Path:
     """
     Generate proxy and wait for completion (blocking).
@@ -213,6 +221,7 @@ def generate_and_wait(
         poll_interval: Seconds between polls
         timeout: Maximum wait time
         overwrite: Force retranscode
+        transcoder: "auto", "pynvc", or "ffmpeg"
 
     Returns:
         Local path to downloaded proxy
@@ -224,8 +233,8 @@ def generate_and_wait(
 
     # For simpler wait, use synchronous remote with timeout
     # Option 1: spawn + poll loop (allows progress prints)
-    call_id = generate_proxy(film_id, overwrite=overwrite)
-    print(f"Proxy job spawned: {call_id}, polling every {poll_interval}s (timeout {timeout}s)...")
+    call_id = generate_proxy(film_id, overwrite=overwrite, transcoder=transcoder)
+    print(f"Proxy job spawned: {call_id} (transcoder={transcoder}), polling every {poll_interval}s (timeout {timeout}s)...")
     elapsed = 0
     while elapsed < timeout:
         status = poll_proxy(film_id, call_id)
@@ -242,7 +251,7 @@ def generate_and_wait(
     raise TimeoutError(f"Proxy generation timed out after {timeout}s (call_id={call_id})")
 
 
-def transcode_proxy_sync(film_id: str, overwrite: bool = False) -> dict:
+def transcode_proxy_sync(film_id: str, overwrite: bool = False, transcoder: str = "auto") -> dict:
     """
     Synchronous variant that directly calls Modal function and returns metadata without downloading.
 
@@ -250,6 +259,10 @@ def transcode_proxy_sync(film_id: str, overwrite: bool = False) -> dict:
     """
     import modal
 
+    transcoder = transcoder.lower()
+    if transcoder not in ("auto", "pynvc", "ffmpeg"):
+        raise ValueError(f"Invalid transcoder '{transcoder}'. Must be one of: auto, pynvc, ffmpeg")
+
     func = modal.Function.from_name("splicer", "transcode_proxy")
-    result = func.remote(film_id, overwrite=overwrite)
+    result = func.remote(film_id, overwrite=overwrite, transcoder=transcoder)
     return result

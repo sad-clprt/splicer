@@ -22,7 +22,7 @@ from pathlib import Path
 import modal
 
 from .app import app, volume, VOLUME_MOUNT
-from .common import probe_video, transcode_auto
+from .common import probe_video, transcode_auto, transcode_ffmpeg, transcode_pynvc
 
 # Image with CUDA 13.3.1 runtime + PyNvVideoCodec (NVIDIA Video SDK Python bindings)
 # Reference: https://hub.docker.com/layers/nvidia/cuda/13.3.1-runtime-ubuntu24.04/images/sha256-6155abf10c038d0daf166932f2b83865341ee1e9c92b452a6fae01c6ce31a5ac
@@ -44,14 +44,20 @@ image = (
     timeout=3600,  # 1 hour — no RunPod 10min limit
     retries=modal.Retries(max_retries=1),
 )
-def transcode_proxy(film_id: str, source_filename: str | None = None, overwrite: bool = False) -> dict:
+def transcode_proxy(
+    film_id: str,
+    source_filename: str | None = None,
+    overwrite: bool = False,
+    transcoder: str = "auto",
+) -> dict:
     """
-    Transcode film source to 480p proxy on Modal Volume via PyNvVideoCodec.
+    Transcode film source to 480p proxy on Modal Volume.
 
     Args:
         film_id: Film directory name (e.g. i_am_legend_ed264664)
         source_filename: Optional override (default: auto-detect source.mp4)
         overwrite: If False, skip if proxy already exists
+        transcoder: "auto" (try PyNvVideoCodec, fallback ffmpeg), "pynvc" (force PyNvVideoCodec), "ffmpeg" (force ffmpeg)
 
     Returns:
         dict with proxy_path, width, height, duration_seconds, size_bytes, codec_used, fps_achieved, transcoder
@@ -112,7 +118,7 @@ def transcode_proxy(film_id: str, source_filename: str | None = None, overwrite:
             "skipped": True,
         }
 
-    logger.info(f"Transcoding {source_path} -> {proxy_path} (film_id={film_id}) via PyNvVideoCodec")
+    logger.info(f"Transcoding {source_path} -> {proxy_path} (film_id={film_id}) via {transcoder}")
     start = time.perf_counter()
 
     try:
@@ -122,8 +128,17 @@ def transcode_proxy(film_id: str, source_filename: str | None = None, overwrite:
         logger.warning(f"Failed to probe source: {e}")
         src_meta = {}
 
-    # Auto aspect: probes source (1920x800 -> 854x356) and uses 900k bitrate for ~3x smaller file
-    out_meta = transcode_auto(source_path, proxy_path)
+    # Validate transcoder choice
+    transcoder = transcoder.lower()
+    if transcoder not in ("auto", "pynvc", "ffmpeg"):
+        raise ValueError(f"Invalid transcoder '{transcoder}'. Must be one of: auto, pynvc, ffmpeg")
+
+    if transcoder == "pynvc":
+        out_meta = transcode_pynvc(source_path, proxy_path)
+    elif transcoder == "ffmpeg":
+        out_meta = transcode_ffmpeg(source_path, proxy_path)
+    else:  # auto
+        out_meta = transcode_auto(source_path, proxy_path)
 
     size_bytes = Path(proxy_path).stat().st_size
     size_mb = size_bytes / (1024 * 1024)
@@ -160,7 +175,7 @@ def transcode_proxy(film_id: str, source_filename: str | None = None, overwrite:
 
 
 @app.local_entrypoint()
-def main(film_id: str, overwrite: bool = False):
-    """Local entrypoint for `modal run -m modal_app.proxy --film-id ...`"""
-    result = transcode_proxy.remote(film_id, overwrite=overwrite)
+def main(film_id: str, overwrite: bool = False, transcoder: str = "auto"):
+    """Local entrypoint for `modal run -m modal_app.proxy --film-id ... --transcoder ffmpeg|pynvc|auto`"""
+    result = transcode_proxy.remote(film_id, overwrite=overwrite, transcoder=transcoder)
     print(result)
