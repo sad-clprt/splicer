@@ -1,7 +1,7 @@
 """Stage 07: Assemble final video with moviepy.
 
 Combines proxy video, TTS audio, applies cuts/effects/zoom based on VLM beats.
-Exports final 1080p video. This stage should run on RunPod GPU for hardware encoding.
+Exports final 1080p video. This stage should run on Modal GPU for hardware encoding.
 
 NOTE: For now this is a stub. Full implementation requires moviepy integration
 with video editing logic based on VLM scene data and TTS timing.

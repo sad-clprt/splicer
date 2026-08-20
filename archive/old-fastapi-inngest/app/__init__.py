@@ -1,1 +1,0 @@
-"""Splicer app package."""

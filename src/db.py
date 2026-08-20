@@ -1,6 +1,6 @@
 """SQLite helper for splicer pipeline.
 
-All heavy work stays on RunPod; this DB is only pointers + job mirror.
+All heavy work now on Modal; this DB is only pointers + job mirror (legacy).
 No ORM — raw sqlite3. File lives at src/splicer.db (can be recreated).
 
 Tables:
