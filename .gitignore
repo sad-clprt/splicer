@@ -5,29 +5,31 @@ build/
 dist/
 wheels/
 *.egg-info
-
+.ruff_cache/
+.pytest_cache/
 # Virtual environments
 .venv
 
+# SSH keys
+*.pub
 
 .env
 
 .vscode/
-
-
+downloads/
 whiteboard.md
+opencode.jsonc
+.claude/
+films/
+.opencode/
 
-
-.opencode
-
-
-.commandcode
+.commandcode/
 
 # Log database
 .logs/
 .ruff_cache/
 
-.pi
+.pi/
 .codegraph/
 
 whiteboard.md

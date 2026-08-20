@@ -49,13 +49,13 @@ splicer/
 │       ├── assemble.py
 │       └── safety.py
 │
-├── handlers/                       # RunPod serverless handlers
-│   └── proxy/
-│       ├── handler.py
-│       ├── Dockerfile
-│       └── requirements.txt
+├── modal_app/                     # Modal endpoints (one per tool)
+│   └── proxy.py                    # 1080p → 480p transcoding
 │
-├── src/                            # Old pipeline (kept as backup during migration)
+├── handlers/                       # Deprecated: RunPod handlers removed
+│   └── proxy/                      # (now Modal, kept as placeholder)
+│
+├── src/                            # Old pipeline (deprecated, stubs)
 └── archive/                        # Archived FastAPI/Inngest code
 ```
 
@@ -191,29 +191,29 @@ Agent: Regenerates with adjusted prompt, saves as script/v2.md
 
 Each tool operates independently and updates both manifest.json and index.db:
 
-- **proxy** - FFmpeg transcode to 480p via RunPod
-- **audio** - WhisperX transcription + timing via RunPod
+- **proxy** - FFmpeg/PyNvVideoCodec transcode to 480p via Modal (GPU)
+- **audio** - WhisperX transcription + timing via Modal
 - **knowledge** - External API enrichment (cast, plot, themes)
-- **visual** - Qwen3-VL frame analysis via RunPod
+- **visual** - Qwen3-VL frame analysis via Modal
 - **script** - OpenRouter/Claude script generation
-- **tts** - Text-to-speech via RunPod
+- **tts** - Text-to-speech via Modal
 - **assemble** - MoviePy video assembly
 - **safety** - Content moderation check
 
-## RunPod Handlers
+## Modal Endpoints
 
-Serverless handlers deployed on RunPod:
+GPU endpoints deployed on Modal (replaces RunPod):
 
-- **proxy** - FFmpeg video transcoding (CUDA-accelerated)
+- **proxy** - Video transcoding (CUDA-accelerated) via Modal Function + Volume
 - **audio** - WhisperX (faster-whisper + alignment)
 - **visual** - Qwen3-VL multimodal LLM
 - **tts** - F5-TTS or similar
 
-Each handler:
-1. Receives job via RunPod SDK
-2. Processes on GPU
-3. Uploads result to S3
-4. Returns S3 path + metadata
+Each endpoint:
+1. Triggered via `modal.Function.from_name().remote()` or `.spawn()`
+2. Processes on Modal GPU (A10G/L4/A100 as needed, configurable timeout)
+3. Reads/writes via Modal Volume (`/films`)
+4. Returns metadata to caller; client updates manifest + index.db
 
 ## Development Status
 
@@ -226,10 +226,10 @@ Each handler:
 
 ### 🚧 In Progress
 - Tool implementations (proxy, audio, knowledge, visual, script, tts, assemble, safety)
-- RunPod handler for proxy (Dockerfile ready, handler pending)
+- Modal endpoint for proxy (planning)
 
 ### 📋 TODO
-- Remaining RunPod handlers (audio, visual, tts)
+- Remaining Modal endpoints (audio, visual, tts, safety)
 - Agent integration layer
 - CLI interface
 - Full pipeline testing

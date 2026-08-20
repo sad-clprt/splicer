@@ -187,12 +187,14 @@ def proxy_cmd():
 
 @proxy_cmd.command("generate")
 @click.argument("film_id")
-def proxy_generate(film_id):
+@click.option("--transcoder", type=click.Choice(["auto", "pynvc", "ffmpeg"]), default="auto", help="Transcoder engine: auto (pynvc fallback ffmpeg), pynvc (NVIDIA Video SDK), ffmpeg")
+@click.option("--overwrite", is_flag=True, help="Overwrite existing proxy")
+def proxy_generate(film_id, transcoder, overwrite):
     """Generate 480p proxy video."""
     try:
-        console.print(f"Generating proxy for {film_id}...")
-        job_id = proxy.generate_proxy(film_id)
-        console.print(f"[green]✓[/green] Job submitted: {job_id}")
+        console.print(f"Generating proxy for {film_id} via {transcoder}...")
+        job_id = proxy.generate_proxy(film_id, overwrite=overwrite, transcoder=transcoder)
+        console.print(f"[green]✓[/green] Job submitted: {job_id} (transcoder={transcoder})")
         console.print("  Poll with: splicer proxy poll <film_id> <job_id>")
 
     except Exception as e:
@@ -233,12 +235,14 @@ def proxy_download(film_id, output_url):
 @click.argument("film_id")
 @click.option("--poll-interval", default=10, help="Seconds between status polls")
 @click.option("--timeout", default=600, help="Maximum wait time in seconds")
-def proxy_wait(film_id, poll_interval, timeout):
+@click.option("--transcoder", type=click.Choice(["auto", "pynvc", "ffmpeg"]), default="auto", help="Transcoder engine")
+@click.option("--overwrite", is_flag=True, help="Overwrite existing proxy")
+def proxy_wait(film_id, poll_interval, timeout, transcoder, overwrite):
     """Generate proxy and wait for completion."""
     try:
-        console.print(f"[cyan]Starting proxy generation for {film_id}...[/cyan]")
-        path = proxy.generate_and_wait(film_id, poll_interval=poll_interval, timeout=timeout)
-        console.print(f"[green]✓[/green] Proxy generated: {path}")
+        console.print(f"[cyan]Starting proxy generation for {film_id} via {transcoder}...[/cyan]")
+        path = proxy.generate_and_wait(film_id, poll_interval=poll_interval, timeout=timeout, overwrite=overwrite, transcoder=transcoder)
+        console.print(f"[green]✓[/green] Proxy generated: {path} (transcoder={transcoder})")
 
     except Exception as e:
         console.print(f"[red]✗[/red] Error: {e}")

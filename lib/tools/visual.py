@@ -1,5 +1,5 @@
 """
-Visual analysis tool - Qwen3-VL frame analysis via RunPod.
+Visual analysis tool - Qwen3-VL frame analysis via Modal.
 
 Analyzes key frames for visual content, cinematography, scene detection.
 """
@@ -16,7 +16,7 @@ def analyze_visual(
     sample_rate: int = 30
 ) -> str:
     """
-    Submit visual analysis job to RunPod.
+    Submit visual analysis job to Modal.
 
     Args:
         film_id: Film identifier
@@ -24,12 +24,12 @@ def analyze_visual(
         sample_rate: Extract one frame every N seconds
 
     Returns:
-        job_id: RunPod job ID for polling
+        job_id: Modal call ID for polling
 
     TODO:
         - Get video path from manifest
-        - Upload to S3 if needed
-        - Submit Qwen3-VL job to RunPod
+        - Upload to Modal Volume if needed
+        - Submit Qwen3-VL job to Modal
         - Update manifest with job_id and in_progress status
     """
     manifest = get_manifest(film_id)
@@ -47,8 +47,8 @@ def analyze_visual(
     if not video_path.exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
-    # TODO: Implement RunPod job submission
-    # 1. Upload video to S3 (or get existing S3 URL)
+    # TODO: Implement Modal function submission
+    # 1. Upload video to Modal Volume (or get existing Volume path)
     # 2. Submit Qwen3-VL job with sample_rate
     # 3. Store job_id in manifest
 
@@ -56,7 +56,7 @@ def analyze_visual(
         film_id=film_id,
         stage="visual",
         status="in_progress",
-        details={"source": source, "sample_rate": sample_rate, "message": "TODO: RunPod integration pending"}
+        details={"source": source, "sample_rate": sample_rate, "message": "TODO: Modal integration pending"}
     )
 
     return "TODO_JOB_ID"
@@ -64,24 +64,24 @@ def analyze_visual(
 
 def download_visual_analysis(film_id: str, output_url: str) -> Path:
     """
-    Download VLM analysis JSON from S3 to film directory.
+    Download VLM analysis JSON from Modal Volume to film directory.
 
     Args:
         film_id: Film identifier
-        output_url: S3 URL of analysis results
+        output_url: Volume path of analysis results
 
     Returns:
         Local path to vlm_output.json
 
     TODO:
-        - Download from S3
+        - Download from Modal Volume
         - Save to films/{film_id}/visual/vlm_output.json
         - Update manifest
         - Update stage status to completed
     """
     output_path = get_film_dir(film_id) / "visual" / "vlm_output.json"
 
-    # TODO: Implement S3 download
+    # TODO: Implement Modal Volume download
 
     update_stage_status(
         film_id=film_id,

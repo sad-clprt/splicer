@@ -1,5 +1,5 @@
 """
-TTS (Text-to-Speech) tool - Voiceover generation via RunPod.
+TTS (Text-to-Speech) tool - Voiceover generation via Modal.
 
 Converts script text to natural-sounding voiceover audio.
 """
@@ -17,7 +17,7 @@ def generate_voiceover(
     speed: float = 1.0
 ) -> str:
     """
-    Submit TTS job to RunPod.
+    Submit TTS job to Modal.
 
     Args:
         film_id: Film identifier
@@ -26,11 +26,11 @@ def generate_voiceover(
         speed: Playback speed multiplier (0.5 - 2.0)
 
     Returns:
-        job_id: RunPod job ID for polling
+        job_id: Modal call ID for polling
 
     TODO:
         - Load script from script/v{N}.md or script/final.md
-        - Submit TTS job to RunPod
+        - Submit TTS job to Modal
         - Update manifest with job_id and in_progress status
     """
     manifest = get_manifest(film_id)
@@ -50,7 +50,7 @@ def generate_voiceover(
     if not script_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
 
-    # TODO: Implement RunPod job submission
+    # TODO: Implement Modal function submission
     # 1. Read script content
     # 2. Submit TTS job with voice and speed parameters
     # 3. Store job_id in manifest
@@ -59,7 +59,7 @@ def generate_voiceover(
         film_id=film_id,
         stage="voiceover",
         status="in_progress",
-        details={"voice": voice, "speed": speed, "message": "TODO: RunPod integration pending"}
+        details={"voice": voice, "speed": speed, "message": "TODO: Modal integration pending"}
     )
 
     return "TODO_JOB_ID"
@@ -67,24 +67,24 @@ def generate_voiceover(
 
 def download_voiceover(film_id: str, output_url: str) -> Path:
     """
-    Download voiceover audio from S3 to film directory.
+    Download voiceover audio from Modal Volume to film directory.
 
     Args:
         film_id: Film identifier
-        output_url: S3 URL of generated audio
+        output_url: Volume path of generated audio
 
     Returns:
         Local path to full.mp3
 
     TODO:
-        - Download from S3
+        - Download from Modal Volume
         - Save to films/{film_id}/voiceover/full.mp3
         - Update manifest
         - Update stage status to completed
     """
     voiceover_path = get_film_dir(film_id) / "voiceover" / "full.mp3"
 
-    # TODO: Implement S3 download
+    # TODO: Implement Modal Volume download
 
     update_stage_status(
         film_id=film_id,
@@ -112,7 +112,7 @@ def generate_segments(
 
     TODO:
         - Submit segment-by-segment TTS jobs
-        - Download each segment to voiceover/segments/
+        - Download each segment via Modal Volume
         - Return paths for assembly
     """
     segment_dir = get_film_dir(film_id) / "voiceover" / "segments"
@@ -123,7 +123,7 @@ def generate_segments(
     #     job_id = submit_tts_job(segment["text"])
     #     audio_url = poll_and_wait(job_id)
     #     segment_path = segment_dir / f"segment_{i:04d}.mp3"
-    #     download_from_s3(audio_url, segment_path)
+    #     download_via_volume(audio_url, segment_path)
     #     segment_paths.append(segment_path)
 
     return segment_paths
